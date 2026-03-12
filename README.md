@@ -38,7 +38,7 @@ npm install
 
 ```bash
 winget install llama.cpp
-llama-server -hf Qwen/Qwen3-VL-2B-Thinking-GGUF:Q4_K_M
+llama-server -hf Qwen/Qwen3-VL-2B-Instruct-GGUF:Q4_K_M
 ```
 
 ### 3. Run Development Server
@@ -63,6 +63,7 @@ airi/
 ├── electron/                 # Electron main process configuration
 │   ├── main.js              # Electron main entry point
 │   └── preload.js           # Preload scripts for IPC
+├── agent-server/            # Includes agent backend server files
 ├── src/
 │   ├── app/                 # Next.js app directory
 │   │   ├── globals.css      # Global styles
