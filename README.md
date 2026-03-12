@@ -41,6 +41,13 @@ winget install llama.cpp
 llama-server -hf Qwen/Qwen3-VL-2B-Instruct-GGUF:Q4_K_M
 ```
 
+#### create virtual environment for python
+```bash 
+python -m venv .venv
+.venv/Scripts/activate.bat
+pip install -r requirements.txt
+```
+
 ### 3. Run Development Server
 
 ```bash
