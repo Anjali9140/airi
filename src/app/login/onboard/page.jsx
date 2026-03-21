@@ -1,8 +1,10 @@
+import { auth0 } from "@/lib/auth0";
 import LoginDetailForm from "../../../../ui-components/components/LoginDetailForm";
 
-const OnboardPage = () => {
+const OnboardPage = async () => {
+    const session = await auth0.getSession();
     return (
-        <LoginDetailForm />
+        <LoginDetailForm session={session} />
     )
 }
 

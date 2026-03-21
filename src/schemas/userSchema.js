@@ -1,6 +1,6 @@
 import { Schema, model, models } from 'mongoose';
 
-const indexSchema = new Schema({
+const UserSchema = new Schema({
     name: String,
     email: String,
     profile_img: String,
@@ -9,6 +9,6 @@ const indexSchema = new Schema({
     country: String,
 }, { timestamps: true })
 
-const index = models.index || model('index', indexSchema);
+const User = models.User || model('User', UserSchema);
 
-export default index;
+export default User;

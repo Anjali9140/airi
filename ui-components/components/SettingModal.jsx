@@ -3,8 +3,9 @@ import { X } from "lucide-react";
 import { AccountTab } from "./settingModal/AccountTab";
 import { AboutTab } from "./settingModal/AboutTab";
 import { PreferencesTab } from "./settingModal/PreferencesTab";
+import "../index.css"
 
-export function SettingsModal() {
+export function SettingsModal({ onClose }) {
   const [activeTab, setActiveTab] = useState("Preferences");
 
   const tabs = ["Preferences", "Account", "About"];
@@ -15,7 +16,7 @@ export function SettingsModal() {
         {/* top bar  */}
         <div className="w-full flex justify-between h-fit px-4 mb-4">
           <h2 className="text-xl font-semibold px-3">Settings</h2>
-          <button className="text-text-muted hover:text-text-primary transition-colors cursor-pointer">
+          <button onClick={onClose} className="text-text-muted hover:text-text-primary transition-colors cursor-pointer">
             <X size={20} />
           </button>
         </div>

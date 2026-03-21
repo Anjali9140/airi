@@ -77,7 +77,7 @@ export default function ChatInput({
             {showgreet && (
                 <div className="max-sm:pb-4 flex text-[#e5ebfa] font-semibold w-full flex-col items-start justify-start sm:justify-end sm:mb-8 sm:h-25 text-2xl sm:ps-2">
                     <h2 className="text-[28px]">
-                        Hi {user_name}, <br />Where should we start?
+                        <span className="font-normal text-[24px]">Hi {user_name},</span> <br /><span className="text-[36px] max-sm:text-[28px] font-normal tracking-[-0.03125rem]">Where should we start?</span>
                     </h2>
                 </div>
             )}
