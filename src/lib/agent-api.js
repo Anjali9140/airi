@@ -15,7 +15,7 @@ export async function callAgentAPI({ prompt, userId, chatId, onTextChunk, onComp
 
         while (true) {
             const { done, value } = await reader.read();
-            if (done) { onComplete(); break; }
+            if (done) break;
 
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split('\n');
@@ -37,6 +37,7 @@ export async function callAgentAPI({ prompt, userId, chatId, onTextChunk, onComp
                 }
             }
         }
+        onComplete();
     } catch (error) {
         console.error("Stream reading error:", error);
         onError(error);

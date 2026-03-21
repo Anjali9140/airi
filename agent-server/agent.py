@@ -358,10 +358,14 @@ async def chat_completions(request: Request):
         prev_content = ""
         for response in airi.run(messages):
             if not response: continue
-            last = response[-1]
-            if last.get("role") != "assistant": continue
+            # Find the last assistant message
+            assistant_msgs = [m for m in response if m.get("role") == "assistant"]
+            if not assistant_msgs: continue
+            last = assistant_msgs[-1]
 
             full_content = last.get("content") or ""
+            if not isinstance(full_content, str): continue
+
             delta = full_content[len(prev_content):]
             prev_content = full_content
 
@@ -374,10 +378,7 @@ async def chat_completions(request: Request):
                 "model": modelName,
                 "choices": [{
                     "index": 0,
-                    "delta": {
-                        "content": delta,
-                        "tool_calls": last.get("tool_calls")
-                    },
+                    "delta": {"content": delta},
                     "finish_reason": None
                 }]
             }
