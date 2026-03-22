@@ -4,7 +4,6 @@ import { ChatProvider } from "@/context/ChatContext";
 import { auth0 } from "@/lib/auth0";
 import { redirect } from "next/navigation";
 import { encode } from 'node-base64-image';
-import AppsCompo from "../../ui-components/components/AppsCompo";
 
 const UserDashboard = async () => {
     const session = await auth0.getSession();
