@@ -9,6 +9,7 @@ const { MongoClient } = require('mongodb');
 
 let mainWindow = null;
 let llamaProcess = null;
+let embeddingProcess = null;
 let agentProcess = null;
 let appiumProcess = null;
 let atlasCollection = null;
@@ -145,9 +146,21 @@ function snapToOverlay() {
     mainWindow.focus();
 }
 
+function startEmbeddingServer() {
+    embeddingProcess = spawn("llama-server", [
+        "-hf", "unsloth/embeddinggemma-300m-GGUF:Q4_0",
+        "--port", "11445",
+        "--embedding",
+        "--threads", "4",
+        "--n-gpu-layers", "0",
+    ]);
+    embeddingProcess.stdout.on("data", (data) => console.log(`[EMBEDDING] ${data}`));
+    embeddingProcess.stderr.on("data", (data) => console.error(`[EMBEDDING ERROR] ${data}`));
+}
+
 function startLlama() {
     llamaProcess = spawn("llama-server", [
-        "-hf", "ibm-granite/granite-4.0-1b-GGUF:Q4_K_M",
+        "-hf", "unsloth/Qwen3.5-0.8B-GGUF:Q4_K_M",
         "--ctx-size", "32768",
         "-np", "2",
         "--threads", "6",
@@ -205,11 +218,12 @@ app.whenReady().then(() => {
     startAgentServer();
     startAppium();
     startLlama();
+    startEmbeddingServer();
     createWindow();
 });
 
 app.on('before-quit', () => {
-    [llamaProcess, agentProcess, appiumProcess].forEach(proc => {
+    [llamaProcess, embeddingProcess, agentProcess, appiumProcess].forEach(proc => {
         if (proc && !proc.killed) proc.kill();
     });
 });

@@ -79,9 +79,16 @@ const ChatMain = ({ userId, chatId: initialChatId, user_name }) => {
         setStreamingMessageId(messageId);
         accumulatorRef.current = "";
 
+        // Build history: all messages except the empty assistant placeholder just added
+        const history = messagesRef.current
+            .filter((m) => !(m.versions[0].id === messageId))
+            .map((m) => ({ role: m.from === "user" ? "user" : "assistant", content: m.versions[0].content }))
+            .filter((m) => m.content); // drop empty
+
         try {
             await callAgentAPI({
                 prompt: userPrompt,
+                history,
                 userId,
                 chatId: chatIdRef.current,
                 onTextChunk: (chunk) => {

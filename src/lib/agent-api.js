@@ -1,8 +1,10 @@
-export async function callAgentAPI({ prompt, userId, chatId, onTextChunk, onComplete, onError }) {
-    // Connect directly to the agent server to avoid Next.js body timeout limits
+export async function callAgentAPI({ prompt, history = [], userId, chatId, onTextChunk, onComplete, onError }) {
     const agentUrl = typeof window !== "undefined" && window.electronAPI
         ? "http://127.0.0.1:11435/v1/chat/completions"
         : "/api/agent";
+
+    // Build full conversation: prior history + current user message
+    const messages = [...history, { role: "user", content: prompt }];
 
     try {
         const response = await fetch(agentUrl, {
@@ -10,8 +12,8 @@ export async function callAgentAPI({ prompt, userId, chatId, onTextChunk, onComp
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(
                 agentUrl.includes("11435")
-                    ? { model: "airi", stream: true, messages: [{ role: "user", content: prompt }] }
-                    : { prompt, userId, chatId }
+                    ? { model: "airi", stream: true, messages, user_id: userId ?? "default_user", session_id: chatId ?? "default_session" }
+                    : { prompt, history, userId, chatId }
             ),
         });
 

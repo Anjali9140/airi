@@ -3,20 +3,22 @@ export const maxDuration = 3600;
 
 export async function POST(request) {
   try {
-    const { prompt, userId, chatId } = await request.json();
+    const { prompt, history = [], userId, chatId } = await request.json();
 
     const backendUrl = "http://localhost:11435/v1/chat/completions";
 
+    const messages = [...history, { role: "user", content: prompt }];
+
     const response = await fetch(backendUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       signal: AbortSignal.timeout(3600_000),
       body: JSON.stringify({
         model: "airi",
         stream: true,
-        messages: [{ role: "user", content: prompt }],
+        messages,
+        user_id: userId,
+        session_id: chatId,
       }),
     });
 

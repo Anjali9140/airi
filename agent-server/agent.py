@@ -8,6 +8,7 @@ import subprocess
 import pyautogui
 import pyperclip
 import urllib.parse
+from contextvars import ContextVar
 from playwright.sync_api import sync_playwright
 
 # Force UTF-8 output so browser_use emoji logs don't crash on Windows cp1252
@@ -17,7 +18,7 @@ if sys.stderr.encoding != 'utf-8':
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 # Qwen Agent Framework
-from qwen_agent.agents import Assistant
+from qwen_agent.agents import Assistant, VirtualMemoryAgent
 from qwen_agent.llm import get_chat_model
 from qwen_agent.tools.base import BaseTool, register_tool
 from fastapi import FastAPI, Request
@@ -27,10 +28,42 @@ from browser_use import Agent as BrowserAgent
 from browser_use.browser.service import Browser
 from langchain_openai import ChatOpenAI
 
+from mem0 import Memory
+
 import win
 
 logger = logging.getLogger(__name__)
 modelName = "ibm-granite/granite-4.0-1b"
+
+# 1. Initialize Local Mem0 (fully local — no OpenAI key needed)
+mem0_config = {
+    "vector_store": {
+        "provider": "qdrant",
+        "config": {"path": os.path.join(os.path.dirname(os.path.abspath(__file__)), ".mem0_db")}
+    },
+    "llm": {
+        "provider": "openai",
+        "config": {
+            "model": "default",
+            "openai_base_url": "http://127.0.0.1:11434/v1",
+            "api_key": "none",
+        }
+    },
+    "embedder": {
+        "provider": "openai",
+        "config": {
+            "model": "embeddinggemma-300m-Q4_0",
+            "openai_base_url": "http://127.0.0.1:11445/v1",
+            "api_key": "none",
+        }
+    }
+}
+
+mem_client = Memory.from_config(mem0_config)
+
+# Request-scoped context vars — set per request so tools can read them without kwargs
+_current_user_id: ContextVar[str] = ContextVar('user_id', default='default_user')
+_current_session_id: ContextVar[str] = ContextVar('session_id', default='default_session')
 
 def _parse(params):
     """Safely parse params: dict, JSON string, Python repr, or raw primitive."""
@@ -73,8 +106,7 @@ llm_cfg = {
         "top_p": 0.85,
         "top_k": 15,             
         "presence_penalty": 1.2,
-        "max_tokens": 1536,      
-        "stop": ["<|im_end|>", "```"]  
+        "max_tokens": 1536,
     }
 }
 
@@ -282,73 +314,138 @@ class StopAppSession(BaseTool):
             del ACTIVE_SESSIONS[app_id]
         return json.dumps({"app_id": app_id, "status": "closed" if success else "failed", "message": message})
 
+# 2. Define the Mem0 Tool for Qwen
+@register_tool('manage_memory')
+class ManageMemory(BaseTool):
+    description = 'Store or retrieve user preferences (long-term) or task data (working memory).'
+    parameters = [{
+        'name': 'action', 'type': 'string', 'description': 'save or search', 'required': True
+    }, {
+        'name': 'content', 'type': 'string', 'description': 'The info to save or the query to search'
+    }, {
+        'name': 'memory_type', 'type': 'string', 'description': 'long_term or working'
+    }]
 
-SYSTEM_PROMPT = """
-# IDENTITY
-You are Airi, a Windows Desktop AI Assistant. You specialize in app orchestration, web automation, and code execution.
+    def call(self, params: str, **kwargs) -> str:
+        p = _parse(params)
+        action = p.get('action') if isinstance(p, dict) else None
+        content = p.get('content', '') if isinstance(p, dict) else str(p)
+        m_type = p.get('memory_type', 'working') if isinstance(p, dict) else 'working'
 
-# RULES
-1. ATOMICITY: Execute exactly ONE tool call per turn. Wait for output before proceeding.
-2. APP ID STRICTNESS: Never guess an `app_id`. Always `search_win_app_by_name` first.
-3. VISUAL VERIFICATION: Never click blindly. You MUST `inspect_ui_elements` -> `list_element_names` before interaction.
-4. TASK DELEGATION:
-   - Use `browser_automation` for ALL web tasks.
-   - Use `code_interpreter` for logic, math, and file operations.
-   - Use the 7-step Workflow ONLY for Windows Desktop apps.
+        # Read from ContextVar — set in stream_gen's thread before airi.run()
+        user_id = _current_user_id.get()
+        session_id = _current_session_id.get()
 
-# WINDOWS APP WORKFLOW (STRICT SEQUENCE)
-1. search_win_app_by_name(name)
-2. start_app_session(app_id)
-3. inspect_ui_elements(app_id)
-4. list_element_names(app_id)
-5. get_element_details(app_id, element_name)
-6. [Interact via code_interpreter/pyautogui]
-7. stop_app_session(app_id)
+        if action == 'save':
+            try:
+                # long_term: tied to user only so it persists across all sessions
+                # working: tied to both user + session (current chat only)
+                if m_type == 'long_term':
+                    mem_client.add(content, user_id=user_id, metadata={"type": m_type})
+                else:
+                    mem_client.add(content, user_id=user_id, session_id=session_id, metadata={"type": m_type})
+                return f"Saved to {m_type} memory."
+            except Exception as e:
+                return json.dumps({"error": str(e)})
 
-# FEW-SHOT EXAMPLES
+        elif action == 'search':
+            try:
+                # Always search user-level so long_term memories from past sessions are found
+                raw = mem_client.search(content, user_id=user_id, limit=10)
+                # mem0 returns {"results": [...]} — extract the list safely
+                if isinstance(raw, dict):
+                    items = raw.get("results", [])
+                elif isinstance(raw, list):
+                    items = raw
+                else:
+                    items = []
+                # Filter by relevance score and extract text
+                memories = [
+                    r['memory'] for r in items
+                    if isinstance(r, dict) and r.get('memory') and r.get('score', 1.0) >= 0.3
+                ]
+                return json.dumps(memories) if memories else "No relevant memories found."
+            except Exception as e:
+                return json.dumps({"error": str(e)})
 
-## Example 1: Windows App Task (Sticky Notes)
-User: Write "Buy Milk" in Sticky Notes.
-Airi: search_win_app_by_name("sticky notes")
-Result: [{"app_id": "Microsoft.MicrosoftStickyNotes_8wekyb3d8bbwe!App"}]
-Airi: start_app_session("Microsoft.MicrosoftStickyNotes_8wekyb3d8bbwe!App")
-Result: {"status": "success"}
-Airi: inspect_ui_elements("Microsoft.MicrosoftStickyNotes_8wekyb3d8bbwe!App")
-Result: {"status": "UI_tree_captured"}
-Airi: list_element_names("Microsoft.MicrosoftStickyNotes_8wekyb3d8bbwe!App")
-Result: ["Note_Window", "Create_Note_Button"]
-Airi: get_element_details("Microsoft.MicrosoftStickyNotes_8wekyb3d8bbwe!App", "Note_Window")
-Result: {"x": 450, "y": 300}
-Airi: code_interpreter(code="pyautogui.click(450, 300); pyautogui.write('Buy Milk')")
-Result: {"status": "success"}
-Airi: stop_app_session("Microsoft.MicrosoftStickyNotes_8wekyb3d8bbwe!App")
+        return json.dumps({"error": f"Unknown action: {action}. Use 'save' or 'search'."})
 
-## Example 2: Web Task (Youtube)
-User: Go to Youtube.com and click on any video
-Airi: browser_automation(task="Go to Youtube.com and click on any video")
 
-## Example 3: Calculation/Data
-User: Calculate the 15% tax on a $1245 invoice and save to 'tax.txt'.
-Airi: code_interpreter(code="tax = 1245 * 0.15; with open('tax.txt', 'w') as f: f.write(str(tax))")
+SYSTEM_PROMPT = """You are Airi, a Windows desktop AI assistant. Control apps, browse web, run code, manage memory.
 
-# TOOL REFERENCE
-- search_win_app_by_name(name): Returns matching AppIds.
-- start_app_session(app_id): Starts session (requires !App suffix).
-- inspect_ui_elements(app_id): Saves UI tree to context/.
-- list_element_names(app_id): Lists interactable names from current tree.
-- get_element_details(app_id, element_name): Returns coordinates/ID for an element.
-- stop_app_session(app_id): Closes session. Mandatory.
-- browser_automation(task): English description of web tasks.
-- web_search(query) / web_fetch(url): Quick web lookup/reading.
-- code_interpreter: Execute Python for logic/automation.
+RULES:
+- ONE tool call per turn. Wait for result before next.
+- Never guess app_id — always search_win_app_by_name first.
+- Never interact with UI without inspect_ui_elements first.
+- Start of conversation: search memory for user context.
+- Save user preferences/facts immediately when mentioned.
 
-# ERROR RECOVERY
-- UI Stale: If an element is missing, re-run tool `inspect_ui_elements`.
-- Launch Fail: Re-verify `app_id` string via search.
+TOOLS:
+search_win_app_by_name(name)
+start_app_session(app_id)
+inspect_ui_elements(app_id)
+list_element_names(app_id)
+get_element_details(app_id, element_name)
+stop_app_session(app_id)
+browser_automation(task)
+web_search(query)
+manage_memory(action, content, memory_type)  # action: save|search  memory_type: long_term|working
+scan_document(file, query)
 
+APP WORKFLOW ORDER:
+search_win_app_by_name → start_app_session → inspect_ui_elements → list_element_names → get_element_details → stop_app_session
+
+EXAMPLES:
+User: open calculator
+→ search_win_app_by_name("calculator")
+
+User: go to youtube
+→ browser_automation("go to youtube.com")
+
+User: my name is Alex
+→ manage_memory(action="save", content="User name is Alex", memory_type="long_term")
+
+User: what do you know about me?
+→ manage_memory(action="search", content="user info")
+
+User: summarize report.pdf
+→ scan_document(file="report.pdf", query="summarize")
 """
 
 # --- 6. AGENT INITIALIZATION ---
+
+# DocScanner wrapped as a tool so Assistant can call it without Router overhead
+_doc_agent_instance = VirtualMemoryAgent(
+    llm=llm_cfg,
+    name='DocScanner',
+    description='Reads and summarizes large documents or files.',
+)
+
+@register_tool('scan_document')
+class ScanDocumentTool(BaseTool):
+    description = 'Read, summarize, or answer questions about a large document or file.'
+    parameters = [
+        {'name': 'file', 'type': 'string', 'required': True, 'description': 'Absolute or relative path to the file'},
+        {'name': 'query', 'type': 'string', 'required': True, 'description': 'What you want to know about the file'},
+    ]
+
+    def call(self, params: str, **kwargs) -> str:
+        p = _parse(params)
+        file_path = p.get('file', '') if isinstance(p, dict) else ''
+        query = p.get('query', '') if isinstance(p, dict) else str(p)
+        try:
+            messages = [{'role': 'user', 'content': [{'text': query}, {'file': file_path}]}]
+            result = ''
+            for resp in _doc_agent_instance.run(messages):
+                if resp:
+                    last = [m for m in resp if m.get('role') == 'assistant']
+                    if last:
+                        result = last[-1].get('content', '')
+            return str(result) if result else 'No result from DocScanner.'
+        except Exception as e:
+            return json.dumps({'error': str(e)})
+
+# Single Assistant — no Router, no routing confusion
 airi = Assistant(
     llm=llm_cfg,
     system_message=SYSTEM_PROMPT,
@@ -356,7 +453,9 @@ airi = Assistant(
         'browser_automation',
         'search_win_app_by_name', 'start_app_session',
         'inspect_ui_elements', 'list_element_names', 'get_element_details',
-        'stop_app_session', 'web_search'
+        'stop_app_session', 'web_search',
+        'manage_memory',
+        'scan_document',
     ]
 )
 
@@ -365,12 +464,25 @@ airi = Assistant(
 async def chat_completions(request: Request):
     data = await request.json()
     messages = data.get("messages", [])
-    
+    user_id = data.get("user_id", "default_user")
+    session_id = data.get("session_id", "default_session")
+
+    # Set context vars for this request — captured by closure below, not relied on for thread safety
+    _current_user_id.set(user_id)
+    _current_session_id.set(session_id)
+
     def stream_gen():
+        # Capture user_id/session_id as closure locals — safe across concurrent requests
+        # and across threadpool execution where ContextVar propagation is unreliable
+        _uid = user_id
+        _sid = session_id
+        # Temporarily set context vars inside this thread so ManageMemory.call() reads them
+        _current_user_id.set(_uid)
+        _current_session_id.set(_sid)
+
         prev_content = ""
         for response in airi.run(messages):
             if not response: continue
-            # Find the last assistant message
             assistant_msgs = [m for m in response if m.get("role") == "assistant"]
             if not assistant_msgs: continue
             last = assistant_msgs[-1]
@@ -396,7 +508,7 @@ async def chat_completions(request: Request):
             }
 
             yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-        
+
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(stream_gen(), media_type="text/event-stream")
