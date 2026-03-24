@@ -8,3 +8,5 @@ browser-use
 soundfile
 langchain-openai
 tf-playwright-stealth
+mem0ai 
+qdrant-client
