@@ -51,17 +51,18 @@ import win
 modelName = "Qwen/Qwen3-VL-2B-Instruct-GGUF"
 
 # ── Mem0 DB dim-mismatch guard ────────────────────────────────────────────────
-_MEM0_DB   = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".mem0_db")
-_EMBED_DIMS = 768  # embeddinggemma-300m-Q4_0
+_MEM0_DB        = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".mem0_db")
+_EMBED_DIMS     = 768
+_COLLECTION     = "airi_memory"
+_EMBED_MODEL    = "unsloth/embeddinggemma-300m-GGUF:Q4_0"
+_EMBED_BASE_URL = "http://127.0.0.1:11445/v1"
 
-# ── Embedding server health check ────────────────────────────────────────────
+# ── Wait for embedding server ─────────────────────────────────────────────────
 def _wait_for_embedding_server(max_retries=40, delay=0.5):
-    """Block until the embedding server at 11445 is ready."""
     import time, requests
     for i in range(max_retries):
         try:
-            resp = requests.get("http://127.0.0.1:11445/health", timeout=1)
-            if resp.status_code == 200:
+            if requests.get("http://127.0.0.1:11445/health", timeout=1).status_code == 200:
                 logger.info("[mem0] Embedding server ready")
                 return True
         except Exception:
@@ -73,54 +74,68 @@ def _wait_for_embedding_server(max_retries=40, delay=0.5):
     return False
 
 def _probe_embedding_dims():
-    """Ask the embedding server what dims it actually returns."""
     import requests
     try:
-        resp = requests.post(
-            "http://127.0.0.1:11445/v1/embeddings",
-            json={"model": "unsloth/embeddinggemma-300m-GGUF:Q4_0", "input": "test"},
+        data = requests.post(
+            f"{_EMBED_BASE_URL}/embeddings",
+            json={"model": _EMBED_MODEL, "input": "test"},
             timeout=5,
-        )
-        data = resp.json()
+        ).json()
         dims = len(data["data"][0]["embedding"])
         logger.info(f"[mem0] Embedder returns {dims} dims")
         return dims
     except Exception as e:
-        logger.warning(f"[mem0] Could not probe embedding dims: {e}")
+        logger.warning(f"[mem0] Could not probe dims: {e}")
         return _EMBED_DIMS
 
-def _check_and_fix_mem0_db(actual_dims):
-    """Wipe the qdrant DB if its dims don't match the live embedder."""
-    meta_path = os.path.join(_MEM0_DB, "meta.json")
-    if not os.path.exists(meta_path):
-        return
-    try:
-        with open(meta_path) as f:
-            meta = json.load(f)
-        collections = meta.get("collections", {})
-        coll = collections.get("airi_memory") or collections.get("mem0") or {}
-        size = coll.get("vectors", {}).get("size")
-        if size is not None and size != actual_dims:
-            logger.warning(f"[mem0] DB dim={size} != embedder dim={actual_dims}. Recreating DB.")
-            shutil.rmtree(_MEM0_DB, ignore_errors=True)
+def _ensure_qdrant_collection(dims: int):
+    """
+    Pre-create the qdrant collection with the correct dims BEFORE mem0 touches it.
+    If the collection exists with wrong dims, delete and recreate it.
+    This prevents mem0 from ever creating a 1536-dim collection.
+    """
+    from qdrant_client import QdrantClient
+    from qdrant_client.models import Distance, VectorParams
+
+    os.makedirs(_MEM0_DB, exist_ok=True)
+    client = QdrantClient(path=_MEM0_DB)
+
+    existing = {c.name: c for c in client.get_collections().collections}
+
+    if _COLLECTION in existing:
+        current_dims = existing[_COLLECTION].config.params.vectors.size
+        if current_dims != dims:
+            logger.warning(f"[mem0] Collection has {current_dims} dims, need {dims}. Recreating.")
+            client.delete_collection(_COLLECTION)
+            client.create_collection(
+                _COLLECTION,
+                vectors_config=VectorParams(size=dims, distance=Distance.COSINE),
+            )
+            logger.info(f"[mem0] Collection recreated with {dims} dims")
         else:
-            logger.info(f"[mem0] DB dims OK ({size})")
-    except Exception as e:
-        logger.warning(f"[mem0] Could not check DB dims: {e}")
-        shutil.rmtree(_MEM0_DB, ignore_errors=True)
+            logger.info(f"[mem0] Collection OK ({dims} dims)")
+    else:
+        client.create_collection(
+            _COLLECTION,
+            vectors_config=VectorParams(size=dims, distance=Distance.COSINE),
+        )
+        logger.info(f"[mem0] Collection created with {dims} dims")
 
-# Wait for embedder, probe actual dims, then fix DB if needed
+    client.close()
+
+# ── Init sequence ─────────────────────────────────────────────────────────────
 _wait_for_embedding_server()
-_EMBED_DIMS = _probe_embedding_dims()   # override with live value
-_check_and_fix_mem0_db(_EMBED_DIMS)
+_EMBED_DIMS = _probe_embedding_dims()
+_ensure_qdrant_collection(_EMBED_DIMS)
 
-# ── Mem0 Configuration (Fully Local) ─────────────────────────────────────────
+# ── Mem0 Configuration ────────────────────────────────────────────────────────
 mem0_config = {
     "vector_store": {
         "provider": "qdrant",
         "config": {
             "path": _MEM0_DB,
-            "collection_name": "airi_memory",
+            "collection_name": _COLLECTION,
+            "on_disk": True,
         }
     },
     "llm": {
@@ -136,8 +151,8 @@ mem0_config = {
     "embedder": {
         "provider": "openai",
         "config": {
-            "model": "default",
-            "openai_base_url": "http://127.0.0.1:11445/v1",
+            "model": _EMBED_MODEL,
+            "openai_base_url": _EMBED_BASE_URL,
             "api_key": "none",
             "embedding_dims": _EMBED_DIMS,
         }
@@ -145,6 +160,7 @@ mem0_config = {
 }
 
 mem_client = Memory.from_config(mem0_config)
+logger.info(f"[mem0] Ready — collection '{_COLLECTION}' @ {_EMBED_DIMS} dims")
 
 # ── Request-Scoped Context Variables ─────────────────────────────────────────
 _current_user_id:    ContextVar[str] = ContextVar('user_id',    default='default_user')
@@ -463,78 +479,160 @@ class StopAppSession(BaseTool):
         return json.dumps({"app_id": app_id, "status": "closed" if success else "failed", "message": message})
 
 
-@register_tool('manage_memory')
-class ManageMemory(BaseTool):
-    """Store or retrieve user facts for personalised assistance.
-
-    mem0 1.0.7 API notes (verified):
-    - add()    : omit run_id for long-term memory (persists across sessions)
-                 use run_id=session_id for session-only memory
-                 infer=False stores raw text (no LLM extraction)
-    - search() : native threshold= param; returns {"results": [...]}
-    - delete_all(): user_id+run_id clears session; user_id only clears all
-    """
-    description = 'Save or search user facts/preferences. action: save | search | delete_session | delete_all'
+@register_tool('add_memory')
+class AddMemory(BaseTool):
+    description = "Save a fact or preference about the user to long-term memory. Use whenever the user shares personal info, preferences, or important facts."
     parameters = [
-        {'name': 'action',  'type': 'string', 'required': True,
-         'description': "save — store a fact (long-term); search — retrieve relevant facts; delete_session — clear session memories; delete_all — clear all user memories"},
-        {'name': 'content', 'type': 'string',
-         'description': 'Fact to save, or query to search for'},
+        {'name': 'content', 'type': 'string', 'required': True,
+         'description': "The fact or preference to remember (e.g. 'User prefers dark mode', 'User name is Ansh')"},
     ]
-
     def call(self, params: str, **kwargs) -> str:
         p       = _parse(params)
-        action  = p.get('action')  if isinstance(p, dict) else str(p)
-        content = p.get('content', '') if isinstance(p, dict) else ''
-        user_id    = _current_user_id.get()
-        session_id = _current_session_id.get()
-        logger.info(f"[manage_memory] action={action} user={user_id}")
+        content = p.get('content', '') if isinstance(p, dict) else str(p)
+        user_id = _current_user_id.get()
+        if not content:
+            return json.dumps({"error": "content is required"})
+        try:
+            result = mem_client.add(
+                [{"role": "user", "content": content}],
+                user_id=user_id,
+                infer=False,
+            )
+            ids = [r.get("id") for r in result.get("results", [])]
+            logger.info(f"[add_memory] saved {len(ids)} memories for {user_id}")
+            return json.dumps({"saved": True, "ids": ids})
+        except Exception as e:
+            logger.error(f"[add_memory] error: {e}")
+            return json.dumps({"error": str(e)})
 
-        if action == 'save':
-            if not content:
-                return json.dumps({"error": "content is required for save"})
-            try:
-                # Long-term memory: omit run_id so facts persist across sessions
-                result = mem_client.add(
-                    [{"role": "user", "content": content}],
-                    user_id=user_id,
-                    infer=False,
-                )
-                ids = [r.get("id") for r in result.get("results", [])]
-                return json.dumps({"saved": True, "ids": ids})
-            except Exception as e:
-                logger.error(f"[manage_memory] save error: {e}")
-                return json.dumps({"error": str(e)})
 
-        elif action == 'search':
-            if not content:
-                return json.dumps({"error": "content is required for search"})
-            try:
-                # threshold= is native in mem0 1.0.7 — no manual score filtering needed
-                raw     = mem_client.search(content, user_id=user_id, limit=8, threshold=0.2)
-                items   = raw.get("results", []) if isinstance(raw, dict) else []
-                memories = [r["memory"] for r in items if r.get("memory")]
-                return json.dumps(memories) if memories else "No relevant memories found."
-            except Exception as e:
-                logger.error(f"[manage_memory] search error: {e}")
-                return json.dumps({"error": str(e)})
+@register_tool('search_memories')
+class SearchMemories(BaseTool):
+    description = "Search user's long-term memories for relevant facts. Use at conversation start or when user asks about past preferences."
+    parameters = [
+        {'name': 'query', 'type': 'string', 'required': True,
+         'description': "What to search for (e.g. 'user preferences', 'name', 'work')"},
+        {'name': 'limit', 'type': 'integer',
+         'description': "Max results to return (default 8)"},
+    ]
+    def call(self, params: str, **kwargs) -> str:
+        p       = _parse(params)
+        query   = p.get('query', '') if isinstance(p, dict) else str(p)
+        limit   = int(p.get('limit', 8)) if isinstance(p, dict) else 8
+        user_id = _current_user_id.get()
+        if not query:
+            return json.dumps({"error": "query is required"})
+        try:
+            raw      = mem_client.search(query, user_id=user_id, limit=limit, threshold=0.15)
+            items    = raw.get("results", []) if isinstance(raw, dict) else []
+            memories = [{"id": r["id"], "memory": r["memory"]} for r in items if r.get("memory")]
+            logger.info(f"[search_memories] found {len(memories)} for '{query}'")
+            return json.dumps(memories) if memories else json.dumps([])
+        except Exception as e:
+            logger.error(f"[search_memories] error: {e}")
+            return json.dumps({"error": str(e)})
 
-        elif action == 'delete_session':
-            try:
-                mem_client.delete_all(user_id=user_id, run_id=session_id)
-                return json.dumps({"deleted": True, "session_id": session_id})
-            except Exception as e:
-                return json.dumps({"error": str(e)})
 
-        elif action == 'delete_all':
-            try:
-                # Clear ALL user memories (long-term + session)
-                mem_client.delete_all(user_id=user_id)
-                return json.dumps({"deleted": True, "user_id": user_id})
-            except Exception as e:
-                return json.dumps({"error": str(e)})
+@register_tool('get_memories')
+class GetMemories(BaseTool):
+    description = "Get all stored memories for the current user."
+    parameters = [
+        {'name': 'limit', 'type': 'integer',
+         'description': "Max memories to return (default 50)"},
+    ]
+    def call(self, params: str, **kwargs) -> str:
+        p       = _parse(params)
+        limit   = int(p.get('limit', 50)) if isinstance(p, dict) else 50
+        user_id = _current_user_id.get()
+        try:
+            raw      = mem_client.get_all(user_id=user_id, limit=limit)
+            items    = raw.get("results", []) if isinstance(raw, dict) else raw
+            memories = [{"id": r["id"], "memory": r["memory"]} for r in items if r.get("memory")]
+            logger.info(f"[get_memories] {len(memories)} memories for {user_id}")
+            return json.dumps(memories)
+        except Exception as e:
+            logger.error(f"[get_memories] error: {e}")
+            return json.dumps({"error": str(e)})
 
-        return json.dumps({"error": f"Unknown action '{action}'. Use: save, search, delete_session, delete_all"})
+
+@register_tool('get_memory')
+class GetMemory(BaseTool):
+    description = "Get a single memory by its ID."
+    parameters = [
+        {'name': 'memory_id', 'type': 'string', 'required': True,
+         'description': "The memory ID to retrieve"},
+    ]
+    def call(self, params: str, **kwargs) -> str:
+        p         = _parse(params)
+        memory_id = p.get('memory_id', '') if isinstance(p, dict) else str(p)
+        if not memory_id:
+            return json.dumps({"error": "memory_id is required"})
+        try:
+            result = mem_client.get(memory_id)
+            return json.dumps(result) if result else json.dumps({"error": "Memory not found"})
+        except Exception as e:
+            logger.error(f"[get_memory] error: {e}")
+            return json.dumps({"error": str(e)})
+
+
+@register_tool('update_memory')
+class UpdateMemory(BaseTool):
+    description = "Update an existing memory by ID with new content."
+    parameters = [
+        {'name': 'memory_id', 'type': 'string', 'required': True,
+         'description': "The memory ID to update"},
+        {'name': 'content',   'type': 'string', 'required': True,
+         'description': "New content to replace the memory with"},
+    ]
+    def call(self, params: str, **kwargs) -> str:
+        p         = _parse(params)
+        memory_id = p.get('memory_id', '') if isinstance(p, dict) else ''
+        content   = p.get('content',   '') if isinstance(p, dict) else ''
+        if not memory_id or not content:
+            return json.dumps({"error": "memory_id and content are required"})
+        try:
+            mem_client.update(memory_id, content)
+            logger.info(f"[update_memory] updated {memory_id}")
+            return json.dumps({"updated": True, "memory_id": memory_id})
+        except Exception as e:
+            logger.error(f"[update_memory] error: {e}")
+            return json.dumps({"error": str(e)})
+
+
+@register_tool('delete_memory')
+class DeleteMemory(BaseTool):
+    description = "Delete a specific memory by ID."
+    parameters = [
+        {'name': 'memory_id', 'type': 'string', 'required': True,
+         'description': "The memory ID to delete"},
+    ]
+    def call(self, params: str, **kwargs) -> str:
+        p         = _parse(params)
+        memory_id = p.get('memory_id', '') if isinstance(p, dict) else str(p)
+        if not memory_id:
+            return json.dumps({"error": "memory_id is required"})
+        try:
+            mem_client.delete(memory_id)
+            logger.info(f"[delete_memory] deleted {memory_id}")
+            return json.dumps({"deleted": True, "memory_id": memory_id})
+        except Exception as e:
+            logger.error(f"[delete_memory] error: {e}")
+            return json.dumps({"error": str(e)})
+
+
+@register_tool('delete_all_memories')
+class DeleteAllMemories(BaseTool):
+    description = "Delete ALL memories for the current user. Use only when user explicitly asks to forget everything."
+    parameters = []
+    def call(self, params: str, **kwargs) -> str:
+        user_id = _current_user_id.get()
+        try:
+            mem_client.delete_all(user_id=user_id)
+            logger.info(f"[delete_all_memories] cleared all for {user_id}")
+            return json.dumps({"deleted": True, "user_id": user_id})
+        except Exception as e:
+            logger.error(f"[delete_all_memories] error: {e}")
+            return json.dumps({"error": str(e)})
 
 
 # ── SYSTEM PROMPT ─────────────────────────────────────────────────────────────
@@ -560,8 +658,8 @@ Your goal is to make every task feel easy and enjoyable. ✨
 1. **ONE tool at a time** — Call one tool, wait for result, then proceed.
 2. **Always search before launching** — Use `search_win_app_by_name` before `start_app_session`.
 3. **Always inspect before interacting** — Use `inspect_ui_elements` before clicking/typing in apps.
-4. **Save important info** — When user shares preferences/facts, use `manage_memory(action=save)`.
-5. **Check memory first** — At conversation start, search for relevant user context.
+4. **Save important info** — When user shares preferences/facts, use `add_memory`.
+5. **Check memory first** — At conversation start, use `search_memories` to retrieve relevant context.
 6. **Files are automatic** — Uploaded documents/images are analyzed directly (no tool needed).
 7. **Clean up sessions** — Call `stop_app_session` when app tasks are complete.
 8. **Be honest about limits** — If something fails, explain clearly and suggest alternatives.
@@ -577,7 +675,13 @@ Your goal is to make every task feel easy and enjoyable. ✨
 | `stop_app_session(app_id)` | Close app when done |
 | `browser_automation(task)` | Web tasks (search, forms, navigation) |
 | `web_search(query)` | Find current info online |
-| `manage_memory(action, content)` | Save/search user info — action: save \| search \| delete_session |
+| `add_memory(content)` | Save a fact about the user |
+| `search_memories(query)` | Find relevant past memories |
+| `get_memories()` | List all user memories |
+| `get_memory(memory_id)` | Get a specific memory by ID |
+| `update_memory(memory_id, content)` | Update an existing memory |
+| `delete_memory(memory_id)` | Delete a specific memory |
+| `delete_all_memories()` | Clear all user memories |
 
 ## 🔄 Typical Workflow
 **For App Tasks:**
@@ -587,8 +691,11 @@ Your goal is to make every task feel easy and enjoyable. ✨
 `browser_automation(task)` handles the full flow internally.
 
 **For Memory:**
-- Save: `manage_memory(action=save, content=<fact>)`
-- Search: `manage_memory(action=search, content=<query>)`
+- Save new fact: `add_memory(content=<fact>)`
+- Find relevant context: `search_memories(query=<topic>)`
+- List all: `get_memories()`
+- Update: `update_memory(memory_id=<id>, content=<new text>)`
+- Delete one: `delete_memory(memory_id=<id>)`
 """
 
 # ── Agent Initialization ─────────────────────────────────────────────────────
@@ -600,7 +707,8 @@ airi = Assistant(
         'search_win_app_by_name', 'start_app_session',
         'inspect_ui_elements', 'list_element_names', 'get_element_details',
         'stop_app_session', 'web_search',
-        'manage_memory',
+        'add_memory', 'search_memories', 'get_memories', 'get_memory',
+        'update_memory', 'delete_memory', 'delete_all_memories',
     ]
 )
 
@@ -908,6 +1016,102 @@ async def health():
         "active_sessions": len(ACTIVE_SESSIONS),
         "timestamp": time.time(),
     }
+
+
+_IMG_EXTS_SET = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'}
+_DOC_EXTS_SET = {'.pdf', '.doc', '.docx', '.txt', '.csv', '.xlsx', '.xls', '.json', '.pptx', '.html', '.md'}
+
+@app.get("/library")
+async def list_library():
+    """List all files in user_stuff, split into documents and media."""
+    docs, media = [], []
+    if not os.path.exists(USER_STUFF_DIR):
+        return {"documents": [], "media": []}
+    for fname in sorted(os.listdir(USER_STUFF_DIR)):
+        fpath = os.path.join(USER_STUFF_DIR, fname)
+        if not os.path.isfile(fpath):
+            continue
+        ext  = os.path.splitext(fname)[1].lower()
+        stat = os.stat(fpath)
+        info = {
+            "name": fname,
+            "size": stat.st_size,
+            "modified": stat.st_mtime,
+            "ext": ext.lstrip("."),
+        }
+        if ext in _IMG_EXTS_SET:
+            media.append(info)
+        elif ext in _DOC_EXTS_SET:
+            docs.append(info)
+        else:
+            docs.append(info)
+    return {"documents": docs, "media": media}
+
+
+@app.delete("/library/{filename}")
+async def delete_library_file(filename: str):
+    """Delete a file from user_stuff by name."""
+    # Sanitize — no path traversal
+    safe_name = os.path.basename(filename)
+    fpath = os.path.join(USER_STUFF_DIR, safe_name)
+    if not os.path.exists(fpath):
+        return {"success": False, "error": "File not found"}
+    try:
+        os.remove(fpath)
+        logger.info(f"[library] Deleted: {safe_name}")
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"[library] Delete error: {e}")
+        return {"success": False, "error": str(e)}
+
+
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+
+@app.get("/library/file/{filename}")
+async def serve_library_file(filename: str):
+    """Serve a file from user_stuff for inline preview."""
+    safe_name = os.path.basename(filename)
+    fpath = os.path.join(USER_STUFF_DIR, safe_name)
+    if not os.path.exists(fpath):
+        return {"error": "File not found"}
+    return FileResponse(fpath)
+
+
+# ── Memory endpoints ──────────────────────────────────────────────────────────
+
+@app.get("/memories")
+async def get_memories(user_id: str = "default_user"):
+    try:
+        raw = mem_client.get_all(user_id=user_id, limit=200)
+        results = raw.get("results", []) if isinstance(raw, dict) else raw
+        return {"memories": results}
+    except Exception as e:
+        logger.error(f"[memories] get error: {e}")
+        return {"memories": [], "error": str(e)}
+
+
+@app.delete("/memories/{memory_id}")
+async def delete_memory(memory_id: str):
+    try:
+        mem_client.delete(memory_id)
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"[memories] delete error: {e}")
+        return {"success": False, "error": str(e)}
+
+
+class MemoryUpdateBody(BaseModel):
+    data: str
+
+@app.put("/memories/{memory_id}")
+async def update_memory(memory_id: str, body: MemoryUpdateBody):
+    try:
+        mem_client.update(memory_id, body.data)
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"[memories] update error: {e}")
+        return {"success": False, "error": str(e)}
 
 
 @app.on_event("shutdown")
