@@ -161,13 +161,14 @@ function startSearxng() {
 
 function startEmbeddingServer() {
     const embeddingExe = path.join(__dirname, '../deps/llama-cpp/llama-server.exe');
+    const embeddingEnv = { ...process.env, LLAMA_CACHE: path.join(__dirname, '../models') };
     embeddingProcess = spawn(embeddingExe, [
         "-hf", "unsloth/embeddinggemma-300m-GGUF:Q4_0",
         "--port", "11445",
         "--embedding",
         "--threads", "4",
         "--n-gpu-layers", "0",
-    ]);
+    ], { env: embeddingEnv });
     embeddingProcess.stdout.on("data", (data) => console.log(`[EMBEDDING] ${data}`));
     embeddingProcess.stderr.on("data", (data) => console.error(`[EMBEDDING ERROR] ${data}`));
 }
