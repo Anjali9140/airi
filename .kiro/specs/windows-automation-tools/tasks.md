@@ -12,11 +12,17 @@
 - [ ] 2. Clean up and update agent.py
   - [ ] 2.1 Remove browser_automation tool, ChromeBrowser class, and all browser-use/langchain imports
   - [ ] 2.2 Remove old FlaUI tools (search_win_app_by_name, start_app_session, inspect_ui_elements, list_element_names, get_element_details, stop_app_session), win import, and ACTIVE_SESSIONS
-  - [ ] 2.3 Add windows_launch tool (register_tool, BaseTool, launch via engine)
-  - [ ] 2.4 Add windows_inspect tool (register_tool, BaseTool, inspect via engine)
-  - [ ] 2.5 Add windows_do tool (register_tool, BaseTool, batch execute via engine)
+  - [ ] 2.3 Add windows_launch, windows_inspect, windows_do tools (register_tool, BaseTool, via flaui engine)
+  - [ ] 2.4 Add file_op tool (list, open, copy, move, delete, create_folder, search with desktop/downloads/documents aliases)
+  - [ ] 2.5 Add list_installed_apps tool (PowerShell Get-StartApps, fallback to Start Menu scan)
+  - [ ] 2.6 Add GET /settings and POST /settings endpoints with settings.json persistence and hot-reload of agent LLM config
+  - [ ] 2.7 Update SYSTEM_PROMPT to reference new tools and remove old tool references
 
-- [ ] 3. Write WindowsAutomator.md skill file
-  - [ ] 3.1 Document when to use each tool and the full action type reference including read_screen
-  - [ ] 3.2 Add example action batches for Chrome, Excel, Word, WhatsApp, CMD, Settings, File Explorer
-  - [ ] 3.3 Explain read_screen as the preferred content-reading method, explicit close_app requirement, and windows_inspect usage guidance
+- [ ] 3. Clean up electron/main.js
+  - [ ] 3.1 Remove startAppium() function, appiumProcess variable, and all references
+  - [ ] 3.2 Make startLlama() read model from settings.json and skip launch if model_server is external
+
+- [ ] 4. Write skill files
+  - [ ] 4.1 Write agent-server/WindowsAutomator.md — tool reference, action table, target syntax, example batches for Chrome/Excel/WhatsApp/CMD/Explorer/Settings
+  - [ ] 4.2 Write agent-server/ChromeNavigator.md — Chrome navigation via FlaUI, address bar patterns, example batches for "go to YouTube and search for X and click first video"
+  - [ ] 4.3 Write agent-server/FileManager.md — file_op tool usage, desktop/downloads/documents examples, combined file_op + windows_launch pattern
