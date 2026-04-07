@@ -343,19 +343,26 @@ _settings = _load_settings()
 
 # ── LLM Configuration ────────────────────────────────────────────────────────
 def _build_llm_cfg(settings: dict) -> dict:
+    is_local = (
+        not settings.get("model_server") or
+        "127.0.0.1" in settings["model_server"] or
+        "localhost" in settings["model_server"]
+    )
+    generate_cfg = {
+        "temperature":        0.5,
+        "top_p":              0.9,
+        "top_k":              20,
+        "presence_penalty":   0.5,
+        "max_tokens":         2048,
+        "repetition_penalty": 1.1,
+    }
+    if is_local:
+        generate_cfg["extra_body"] = {"enable_thinking": settings.get("thinking_enabled", True)}
     return {
         "model":        settings["model"],
         "model_server": settings["model_server"],
         "api_key":      settings.get("api_key", "none"),
-        "generate_cfg": {
-            "temperature":        0.5,
-            "top_p":              0.9,
-            "top_k":              20,
-            "presence_penalty":   0.5,
-            "max_tokens":         2048,
-            "repetition_penalty": 1.1,
-            "extra_body":         {"enable_thinking": settings.get("thinking_enabled", True)},
-        }
+        "generate_cfg": generate_cfg,
     }
 
 llm_cfg = _build_llm_cfg(_settings)

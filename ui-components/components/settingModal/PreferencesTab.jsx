@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { VoiceLanguageDropdown } from "./VoiceLanguageDropdown";
 import { useTheme } from "../../hooks/useTheme";
 
-const AGENT_URL = "http://127.0.0.1:8000";
+const AGENT_URL = "http://127.0.0.1:11435";
 
 function SettingDropdown({ value, setValue, options }) {
   const [open, setOpen] = useState(false);
