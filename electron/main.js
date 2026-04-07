@@ -16,6 +16,7 @@ app.commandLine.appendSwitch('enable-features', 'WebSpeechAPI');
 let mainWindow = null;
 let llamaProcess = null;
 let embeddingProcess = null;
+let searxngProcess = null;
 let agentProcess = null;
 let atlasCollection = null;
 let store = null;
@@ -151,8 +152,16 @@ function snapToOverlay() {
     mainWindow.focus();
 }
 
+function startSearxng() {
+    const searxngExe = path.join(__dirname, '../deps/searxng/searxng-server.exe');
+    searxngProcess = spawn(searxngExe, ["--port", "11455"]);
+    searxngProcess.stdout.on("data", (data) => console.log(`[SEARXNG] ${data}`));
+    searxngProcess.stderr.on("data", (data) => console.error(`[SEARXNG ERROR] ${data}`));
+}
+
 function startEmbeddingServer() {
-    embeddingProcess = spawn("llama-server", [
+    const embeddingExe = path.join(__dirname, '../deps/llama-cpp/llama-server.exe');
+    embeddingProcess = spawn(embeddingExe, [
         "-hf", "unsloth/embeddinggemma-300m-GGUF:Q4_0",
         "--port", "11445",
         "--embedding",
@@ -184,17 +193,19 @@ function startLlama() {
         return;
     }
 
-    llamaProcess = spawn("llama-server", [
+    const llamaExe = path.join(__dirname, '../deps/llama-cpp/llama-server.exe');
+    const llamaEnv = { ...process.env, LLAMA_CACHE: path.join(__dirname, '../models') };
+    llamaProcess = spawn(llamaExe, [
         "-hf", modelName,
         "--ctx-size", "32768",
         "-np", "2",
         "--threads", "6",
         "--n-gpu-layers", "0",
         "--port", "11434",
-        "--cache-type-k", "q8_0",
+        "--cache-type-k", "q4_0",
         "--cache-type-v", "q8_0",
         "--jinja"
-    ]);
+    ], { env: llamaEnv });
     llamaProcess.stdout.on("data", (data) => console.log(`[LLAMA] ${data}`));
     llamaProcess.stderr.on("data", (data) => console.error(`[LLAMA ERROR] ${data}`));
 }
@@ -397,11 +408,12 @@ app.whenReady().then(() => {
     startAgentServer();
     startLlama();
     startEmbeddingServer();
+    startSearxng();
     createWindow();
 });
 
 app.on('before-quit', () => {
-    [llamaProcess, embeddingProcess, agentProcess].forEach(proc => {
+    [llamaProcess, embeddingProcess, searxngProcess, agentProcess].forEach(proc => {
         if (proc && !proc.killed) proc.kill();
     });
 });

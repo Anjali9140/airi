@@ -13,6 +13,8 @@ import pathlib
 import subprocess
 import time
 import tempfile
+import ctypes
+import threading
 import psutil
 
 try:
@@ -74,6 +76,69 @@ if _FLAUI_AVAILABLE:
         _FLAUI_AVAILABLE = False
         _FLAUI_ERROR = exc
         print(f"[flaui] WARNING: Failed to create UIA3Automation singleton — {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Input-blocking overlay
+# A fullscreen always-on-top near-transparent window that eats mouse clicks so
+# the user cannot change focus while the agent is running a batch of actions.
+# No admin rights required. FlaUI sends input via UIA/Win32 directly so it
+# bypasses the overlay entirely.
+# ---------------------------------------------------------------------------
+
+class _InputOverlay:
+    """Fullscreen transparent overlay that blocks user mouse input during batches."""
+
+    def __init__(self):
+        self._thread = None
+        self._root = None
+        self._lock = threading.Lock()
+
+    def show(self):
+        """Show the overlay on a background daemon thread (non-blocking)."""
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                return
+            self._thread = threading.Thread(target=self._run, daemon=True)
+            self._thread.start()
+        time.sleep(0.05)  # give tkinter time to create the window
+
+    def hide(self):
+        """Destroy the overlay window."""
+        root = self._root
+        if root is not None:
+            try:
+                root.after(0, root.destroy)
+            except Exception:
+                pass
+        self._root = None
+
+    def _run(self):
+        try:
+            import tkinter as tk
+            root = tk.Tk()
+            self._root = root
+
+            root.overrideredirect(True)          # no title bar / borders
+            root.attributes("-topmost", True)    # always on top
+            root.attributes("-fullscreen", True) # cover entire screen
+            root.attributes("-alpha", 0.01)      # near-invisible but still captures events
+            root.configure(bg="black")
+
+            # Eat all mouse button events so they don't reach underlying windows
+            for event in ("<Button-1>", "<Button-2>", "<Button-3>",
+                          "<ButtonRelease-1>", "<ButtonRelease-2>", "<ButtonRelease-3>",
+                          "<Double-Button-1>"):
+                root.bind(event, lambda e: "break")
+
+            root.mainloop()
+        except Exception:
+            pass
+        finally:
+            self._root = None
+
+
+_overlay = _InputOverlay()
 
 
 # ---------------------------------------------------------------------------
@@ -575,13 +640,12 @@ class ActionExecutor:
                     pass
                 if not value:
                     try:
-                        value = element.Patterns.Value.Pattern.Value
+                        value = element.Patterns.Text.Pattern.DocumentRange.GetText(-1)
                     except Exception:
                         pass
                 if not value:
                     try:
-                        # Document elements expose text via the Text pattern
-                        value = element.Patterns.Text.Pattern.DocumentRange.GetText(-1)
+                        value = element.Patterns.Value.Pattern.Value
                     except Exception:
                         pass
                 if not value:
@@ -837,6 +901,22 @@ class WindowsAutomationEngine:
                     for a in actions
                 ]
 
+            # Bring the target window to the foreground before dispatching actions
+            try:
+                window.Patterns.Window.Pattern.SetForeground()
+                time.sleep(0.1)
+            except Exception:
+                pass  # best-effort; proceed even if focus fails
+
+            # Prevent other processes from stealing foreground during the batch
+            try:
+                ctypes.windll.user32.LockSetForegroundWindow(1)  # LSFW_LOCK = 1
+            except Exception:
+                pass
+
+            # Show overlay to prevent user from clicking away during the batch
+            _overlay.show()
+
             results = []
             for action in actions:
                 try:
@@ -886,9 +966,23 @@ class WindowsAutomationEngine:
                         "inspect_fallback": _inspect_fallback(window),
                     })
 
+            # Unlock foreground window protection after batch completes
+            try:
+                ctypes.windll.user32.LockSetForegroundWindow(2)  # LSFW_UNLOCK = 2
+            except Exception:
+                pass
+
+            # Hide the input-blocking overlay
+            _overlay.hide()
+
             return results
 
         except Exception as exc:
+            try:
+                ctypes.windll.user32.LockSetForegroundWindow(2)
+            except Exception:
+                pass
+            _overlay.hide()
             return [
                 {
                     "action": a.get("action", ""),

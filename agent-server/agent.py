@@ -770,6 +770,36 @@ class DeleteAllMemories(BaseTool):
             logger.error(f"[delete_all_memories] error: {e}")
             return json.dumps({"error": str(e)})
 
+# ── Internet Search ───────────────────────────────────────────────────────────
+
+@register_tool('internet_search')
+class InternetSearch(BaseTool):
+    description = "Search the internet using SearXNG and return a list of results with titles, URLs, and snippets."
+    parameters = [
+        {'name': 'query', 'type': 'string', 'required': True,
+         'description': "The search query string"},
+    ]
+
+    def call(self, params: str, **kwargs) -> str:
+        p     = _parse(params)
+        query = (p.get('query', '') if isinstance(p, dict) else str(p)).strip()
+        if not query:
+            return json.dumps({"error": "query is required"})
+        try:
+            import urllib.request, urllib.parse
+            url = f"http://127.0.0.1:11455/search?q={urllib.parse.quote(query)}&format=json"
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+            results = [
+                {"title": r.get("title"), "url": r.get("url"), "content": r.get("content")}
+                for r in data.get("results", [])
+            ]
+            logger.info(f"[internet_search] '{query}' → {len(results)} results")
+            return json.dumps({"query": query, "results": results})
+        except Exception as e:
+            logger.error(f"[internet_search] error: {e}")
+            return json.dumps({"error": str(e)})
+
 # ── SYSTEM PROMPT ─────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """# You are Airi — A Friendly Windows Desktop Assistant
 
@@ -815,6 +845,7 @@ Your goal is to make every task feel easy and enjoyable.
 | update_memory(memory_id, content) | Update an existing memory |
 | delete_memory(memory_id) | Delete a specific memory |
 | delete_all_memories() | Clear all user memories |
+| internet_search(query) | Search the internet and return results |
 
 ## windows_do Action Types
 | action | key fields | notes |
@@ -977,8 +1008,27 @@ async def chat_completions(request: Request):
 
     # Build run_messages here (in async context) before handing off to thread
     sys_prompt   = _build_system_prompt(last_user_text)
+
+    # Only pass user + assistant text messages to the agent.
+    # Tool role messages from previous turns confuse the model into thinking
+    # tools already ran, causing it to skip tool calls on follow-up prompts.
+    def _is_passthrough(m) -> bool:
+        role = _msg_role(m)
+        if role == "tool":
+            return False
+        if role == "assistant":
+            # Drop assistant messages that are pure tool-call lists (no text)
+            content = _msg_content(m)
+            if isinstance(content, list):
+                has_text = any(
+                    (item.get("text") if isinstance(item, dict) else getattr(item, "text", None))
+                    for item in content
+                )
+                return has_text
+        return True
+
     run_messages = [Message("system", sys_prompt)] + [
-        m for m in messages if _msg_role(m) != "system"
+        m for m in messages if _msg_role(m) != "system" and _is_passthrough(m)
     ]
 
     def stream_gen():

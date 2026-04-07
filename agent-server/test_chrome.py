@@ -14,6 +14,7 @@ import json
 import time
 
 try:
+    import flaui as flaui_module
     from flaui import engine, _FLAUI_AVAILABLE, _FLAUI_ERROR
 except Exception as e:
     print(f"[FAIL] Could not import flaui: {e}")

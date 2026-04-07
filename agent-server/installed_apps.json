@@ -245,6 +245,11 @@
     "title_hint": "git-gui"
   },
   {
+    "name": "Uninstall Make-3.81",
+    "exe": "C:\\Program Files (x86)\\GnuWin32\\uninstall\\unins000.exe",
+    "title_hint": "unins000"
+  },
+  {
     "name": "Add IncrediBuild Components",
     "exe": "C:\\Program Files (x86)\\IncrediBuild\\Install.exe",
     "title_hint": "Install"
@@ -401,7 +406,7 @@
   },
   {
     "name": "Microsoft Edge WebView2 Runtime",
-    "exe": "C:\\Program Files (x86)\\Microsoft\\EdgeWebView\\Application\\146.0.3856.97\\msedgewebview2.exe",
+    "exe": "C:\\Program Files (x86)\\Microsoft\\EdgeWebView\\Application\\146.0.3856.109\\msedgewebview2.exe",
     "title_hint": "msedgewebview2"
   },
   {
@@ -2500,6 +2505,11 @@
     "title_hint": "steamxboxutil64"
   },
   {
+    "name": "make",
+    "exe": "C:\\Program Files (x86)\\GnuWin32\\bin\\make.exe",
+    "title_hint": "make"
+  },
+  {
     "name": "hhc",
     "exe": "C:\\Program Files (x86)\\HTML Help Workshop\\hhc.exe",
     "title_hint": "hhc"
@@ -2791,6 +2801,46 @@
   },
   {
     "name": "cookie_exporter",
+    "exe": "C:\\Program Files (x86)\\Microsoft\\EdgeCore\\146.0.3856.109\\cookie_exporter.exe",
+    "title_hint": "cookie_exporter"
+  },
+  {
+    "name": "elevated_tracing_service",
+    "exe": "C:\\Program Files (x86)\\Microsoft\\EdgeCore\\146.0.3856.109\\elevated_tracing_service.exe",
+    "title_hint": "elevated_tracing_service"
+  },
+  {
+    "name": "elevation_service",
+    "exe": "C:\\Program Files (x86)\\Microsoft\\EdgeCore\\146.0.3856.109\\elevation_service.exe",
+    "title_hint": "elevation_service"
+  },
+  {
+    "name": "mscopilot",
+    "exe": "C:\\Program Files (x86)\\Microsoft\\EdgeCore\\146.0.3856.109\\mscopilot.exe",
+    "title_hint": "mscopilot"
+  },
+  {
+    "name": "msedge",
+    "exe": "C:\\Program Files (x86)\\Microsoft\\EdgeCore\\146.0.3856.109\\msedge.exe",
+    "title_hint": "msedge"
+  },
+  {
+    "name": "msedgewebview2",
+    "exe": "C:\\Program Files (x86)\\Microsoft\\EdgeCore\\146.0.3856.109\\msedgewebview2.exe",
+    "title_hint": "msedgewebview2"
+  },
+  {
+    "name": "msedge_proxy",
+    "exe": "C:\\Program Files (x86)\\Microsoft\\EdgeCore\\146.0.3856.109\\msedge_proxy.exe",
+    "title_hint": "msedge_proxy"
+  },
+  {
+    "name": "msedge_pwa_launcher",
+    "exe": "C:\\Program Files (x86)\\Microsoft\\EdgeCore\\146.0.3856.109\\msedge_pwa_launcher.exe",
+    "title_hint": "msedge_pwa_launcher"
+  },
+  {
+    "name": "cookie_exporter",
     "exe": "C:\\Program Files (x86)\\Microsoft\\EdgeCore\\146.0.3856.97\\cookie_exporter.exe",
     "title_hint": "cookie_exporter"
   },
@@ -2871,7 +2921,7 @@
   },
   {
     "name": "MicrosoftEdgeComRegisterShellARM64",
-    "exe": "C:\\Program Files (x86)\\Microsoft\\EdgeUpdate\\1.3.225.7\\MicrosoftEdgeComRegisterShellARM64.exe",
+    "exe": "C:\\Program Files (x86)\\Microsoft\\EdgeUpdate\\1.3.227.11\\MicrosoftEdgeComRegisterShellARM64.exe",
     "title_hint": "MicrosoftEdgeComRegisterShellARM64"
   },
   {
@@ -3500,9 +3550,54 @@
     "title_hint": "wheel"
   },
   {
+    "name": "activate-global-python-argcomplete",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\activate-global-python-argcomplete.exe",
+    "title_hint": "activate-global-python-argcomplete"
+  },
+  {
+    "name": "basedpyright-langserver",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\basedpyright-langserver.exe",
+    "title_hint": "basedpyright-langserver"
+  },
+  {
+    "name": "basedpyright",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\basedpyright.exe",
+    "title_hint": "basedpyright"
+  },
+  {
     "name": "bedrock-agentcore",
     "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\bedrock-agentcore.exe",
     "title_hint": "bedrock-agentcore"
+  },
+  {
+    "name": "black",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\black.exe",
+    "title_hint": "black"
+  },
+  {
+    "name": "blackd",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\blackd.exe",
+    "title_hint": "blackd"
+  },
+  {
+    "name": "coloredlogs",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\coloredlogs.exe",
+    "title_hint": "coloredlogs"
+  },
+  {
+    "name": "coverage-3.11",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\coverage-3.11.exe",
+    "title_hint": "coverage-3.11"
+  },
+  {
+    "name": "coverage",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\coverage.exe",
+    "title_hint": "coverage"
+  },
+  {
+    "name": "coverage3",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\coverage3.exe",
+    "title_hint": "coverage3"
   },
   {
     "name": "ct2-fairseq-converter",
@@ -3560,6 +3655,11 @@
     "title_hint": "distro"
   },
   {
+    "name": "docutils",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\docutils.exe",
+    "title_hint": "docutils"
+  },
+  {
     "name": "dotenv",
     "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\dotenv.exe",
     "title_hint": "dotenv"
@@ -3575,9 +3675,24 @@
     "title_hint": "fastapi"
   },
   {
+    "name": "flask",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\flask.exe",
+    "title_hint": "flask"
+  },
+  {
+    "name": "fspath",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\fspath.exe",
+    "title_hint": "fspath"
+  },
+  {
     "name": "gradio",
     "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\gradio.exe",
     "title_hint": "gradio"
+  },
+  {
+    "name": "granian",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\granian.exe",
+    "title_hint": "granian"
   },
   {
     "name": "hf",
@@ -3590,6 +3705,16 @@
     "title_hint": "httpx"
   },
   {
+    "name": "humanfriendly",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\humanfriendly.exe",
+    "title_hint": "humanfriendly"
+  },
+  {
+    "name": "hypothesis",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\hypothesis.exe",
+    "title_hint": "hypothesis"
+  },
+  {
     "name": "ipython",
     "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\ipython.exe",
     "title_hint": "ipython"
@@ -3598,6 +3723,16 @@
     "name": "ipython3",
     "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\ipython3.exe",
     "title_hint": "ipython3"
+  },
+  {
+    "name": "isort-identify-imports",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\isort-identify-imports.exe",
+    "title_hint": "isort-identify-imports"
+  },
+  {
+    "name": "isort",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\isort.exe",
+    "title_hint": "isort"
   },
   {
     "name": "isympy",
@@ -3700,6 +3835,46 @@
     "title_hint": "jupyter"
   },
   {
+    "name": "kernel-autodoc",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\kernel-autodoc.exe",
+    "title_hint": "kernel-autodoc"
+  },
+  {
+    "name": "kernel-doc",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\kernel-doc.exe",
+    "title_hint": "kernel-doc"
+  },
+  {
+    "name": "kernel-grepdoc",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\kernel-grepdoc.exe",
+    "title_hint": "kernel-grepdoc"
+  },
+  {
+    "name": "kernel-lintdoc",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\kernel-lintdoc.exe",
+    "title_hint": "kernel-lintdoc"
+  },
+  {
+    "name": "linuxdoc.autodoc",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\linuxdoc.autodoc.exe",
+    "title_hint": "linuxdoc.autodoc"
+  },
+  {
+    "name": "linuxdoc.grepdoc",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\linuxdoc.grepdoc.exe",
+    "title_hint": "linuxdoc.grepdoc"
+  },
+  {
+    "name": "linuxdoc.lintdoc",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\linuxdoc.lintdoc.exe",
+    "title_hint": "linuxdoc.lintdoc"
+  },
+  {
+    "name": "linuxdoc.rest",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\linuxdoc.rest.exe",
+    "title_hint": "linuxdoc.rest"
+  },
+  {
     "name": "markdown-it",
     "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\markdown-it.exe",
     "title_hint": "markdown-it"
@@ -3715,9 +3890,54 @@
     "title_hint": "mcp"
   },
   {
+    "name": "myst-anchors",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\myst-anchors.exe",
+    "title_hint": "myst-anchors"
+  },
+  {
+    "name": "myst-docutils-demo",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\myst-docutils-demo.exe",
+    "title_hint": "myst-docutils-demo"
+  },
+  {
+    "name": "myst-docutils-html",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\myst-docutils-html.exe",
+    "title_hint": "myst-docutils-html"
+  },
+  {
+    "name": "myst-docutils-html5",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\myst-docutils-html5.exe",
+    "title_hint": "myst-docutils-html5"
+  },
+  {
+    "name": "myst-docutils-latex",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\myst-docutils-latex.exe",
+    "title_hint": "myst-docutils-latex"
+  },
+  {
+    "name": "myst-docutils-pseudoxml",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\myst-docutils-pseudoxml.exe",
+    "title_hint": "myst-docutils-pseudoxml"
+  },
+  {
+    "name": "myst-docutils-xml",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\myst-docutils-xml.exe",
+    "title_hint": "myst-docutils-xml"
+  },
+  {
+    "name": "myst-inv",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\myst-inv.exe",
+    "title_hint": "myst-inv"
+  },
+  {
     "name": "normalizer",
     "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\normalizer.exe",
     "title_hint": "normalizer"
+  },
+  {
+    "name": "nose2",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\nose2.exe",
+    "title_hint": "nose2"
   },
   {
     "name": "numpy-config",
@@ -3785,14 +4005,64 @@
     "title_hint": "pygmentize"
   },
   {
+    "name": "pyi-archive_viewer",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\pyi-archive_viewer.exe",
+    "title_hint": "pyi-archive_viewer"
+  },
+  {
+    "name": "pyi-bindepend",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\pyi-bindepend.exe",
+    "title_hint": "pyi-bindepend"
+  },
+  {
+    "name": "pyi-grab_version",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\pyi-grab_version.exe",
+    "title_hint": "pyi-grab_version"
+  },
+  {
+    "name": "pyi-makespec",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\pyi-makespec.exe",
+    "title_hint": "pyi-makespec"
+  },
+  {
+    "name": "pyi-set_version",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\pyi-set_version.exe",
+    "title_hint": "pyi-set_version"
+  },
+  {
+    "name": "pyinstaller",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\pyinstaller.exe",
+    "title_hint": "pyinstaller"
+  },
+  {
     "name": "pyjson5",
     "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\pyjson5.exe",
     "title_hint": "pyjson5"
   },
   {
+    "name": "pylint-config",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\pylint-config.exe",
+    "title_hint": "pylint-config"
+  },
+  {
+    "name": "pylint",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\pylint.exe",
+    "title_hint": "pylint"
+  },
+  {
     "name": "pypdfium2",
     "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\pypdfium2.exe",
     "title_hint": "pypdfium2"
+  },
+  {
+    "name": "pyreverse",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\pyreverse.exe",
+    "title_hint": "pyreverse"
+  },
+  {
+    "name": "python-argcomplete-check-easy-install-script",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\python-argcomplete-check-easy-install-script.exe",
+    "title_hint": "python-argcomplete-check-easy-install-script"
   },
   {
     "name": "pywin32_postinstall",
@@ -3805,6 +4075,61 @@
     "title_hint": "pywin32_testall"
   },
   {
+    "name": "register-python-argcomplete",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\register-python-argcomplete.exe",
+    "title_hint": "register-python-argcomplete"
+  },
+  {
+    "name": "rst2html",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\rst2html.exe",
+    "title_hint": "rst2html"
+  },
+  {
+    "name": "rst2html4",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\rst2html4.exe",
+    "title_hint": "rst2html4"
+  },
+  {
+    "name": "rst2html5",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\rst2html5.exe",
+    "title_hint": "rst2html5"
+  },
+  {
+    "name": "rst2latex",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\rst2latex.exe",
+    "title_hint": "rst2latex"
+  },
+  {
+    "name": "rst2man",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\rst2man.exe",
+    "title_hint": "rst2man"
+  },
+  {
+    "name": "rst2odt",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\rst2odt.exe",
+    "title_hint": "rst2odt"
+  },
+  {
+    "name": "rst2pseudoxml",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\rst2pseudoxml.exe",
+    "title_hint": "rst2pseudoxml"
+  },
+  {
+    "name": "rst2s5",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\rst2s5.exe",
+    "title_hint": "rst2s5"
+  },
+  {
+    "name": "rst2xetex",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\rst2xetex.exe",
+    "title_hint": "rst2xetex"
+  },
+  {
+    "name": "rst2xml",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\rst2xml.exe",
+    "title_hint": "rst2xml"
+  },
+  {
     "name": "ruff",
     "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\ruff.exe",
     "title_hint": "ruff"
@@ -3815,9 +4140,39 @@
     "title_hint": "send2trash"
   },
   {
+    "name": "sphinx-apidoc",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\sphinx-apidoc.exe",
+    "title_hint": "sphinx-apidoc"
+  },
+  {
+    "name": "sphinx-autobuild",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\sphinx-autobuild.exe",
+    "title_hint": "sphinx-autobuild"
+  },
+  {
+    "name": "sphinx-autogen",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\sphinx-autogen.exe",
+    "title_hint": "sphinx-autogen"
+  },
+  {
+    "name": "sphinx-build",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\sphinx-build.exe",
+    "title_hint": "sphinx-build"
+  },
+  {
+    "name": "sphinx-quickstart",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\sphinx-quickstart.exe",
+    "title_hint": "sphinx-quickstart"
+  },
+  {
     "name": "sprc",
     "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\sprc.exe",
     "title_hint": "sprc"
+  },
+  {
+    "name": "symilar",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\symilar.exe",
+    "title_hint": "symilar"
   },
   {
     "name": "tabulate",
@@ -3850,6 +4205,11 @@
     "title_hint": "uvicorn"
   },
   {
+    "name": "watchfiles",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\watchfiles.exe",
+    "title_hint": "watchfiles"
+  },
+  {
     "name": "watchmedo",
     "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\watchmedo.exe",
     "title_hint": "watchmedo"
@@ -3860,8 +4220,23 @@
     "title_hint": "websockets"
   },
   {
+    "name": "which",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\which.exe",
+    "title_hint": "which"
+  },
+  {
+    "name": "wlc",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\wlc.exe",
+    "title_hint": "wlc"
+  },
+  {
     "name": "wsdump",
     "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\wsdump.exe",
     "title_hint": "wsdump"
+  },
+  {
+    "name": "yamllint",
+    "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\yamllint.exe",
+    "title_hint": "yamllint"
   }
 ]
