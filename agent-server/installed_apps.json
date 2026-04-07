@@ -220,6 +220,16 @@
     "title_hint": "msinfo32"
   },
   {
+    "name": "CMake (cmake-gui)",
+    "exe": "C:\\Program Files\\CMake\\bin\\cmake-gui.exe",
+    "title_hint": "cmake-gui"
+  },
+  {
+    "name": "Uninstall CMake",
+    "exe": "C:\\Windows\\SysWOW64\\msiexec.exe",
+    "title_hint": "msiexec"
+  },
+  {
     "name": "Git Bash",
     "exe": "C:\\Program Files\\Git\\git-bash.exe",
     "title_hint": "git-bash"
@@ -280,11 +290,6 @@
     "title_hint": "node"
   },
   {
-    "name": "Uninstall Node.js",
-    "exe": "C:\\Windows\\SysWOW64\\msiexec.exe",
-    "title_hint": "msiexec"
-  },
-  {
     "name": "Task Manager",
     "exe": "C:\\WINDOWS\\system32\\taskmgr.exe",
     "title_hint": "taskmgr"
@@ -293,6 +298,26 @@
     "name": "VLC media player - reset preferences and cache files",
     "exe": "C:\\Program Files\\VideoLAN\\VLC\\vlc.exe",
     "title_hint": "vlc"
+  },
+  {
+    "name": "Maintenance Tool",
+    "exe": "D:\\vulkan-sdk\\maintenancetool.exe",
+    "title_hint": "maintenancetool"
+  },
+  {
+    "name": "Vulkan Caps Viewer",
+    "exe": "D:\\vulkan-sdk\\Bin\\vulkanCapsViewer.exe",
+    "title_hint": "vulkanCapsViewer"
+  },
+  {
+    "name": "Vulkan Configurator",
+    "exe": "D:\\vulkan-sdk\\Bin\\vkconfig-gui.exe",
+    "title_hint": "vkconfig-gui"
+  },
+  {
+    "name": "Vulkan Cube",
+    "exe": "D:\\vulkan-sdk\\Bin\\vkcube.exe",
+    "title_hint": "vkcube"
   },
   {
     "name": "Application Verifier (X64)",
@@ -423,6 +448,26 @@
     "name": "Python 3.11.9 (64-bit)",
     "exe": "C:\\Users\\Rajesh\\AppData\\Local\\Package Cache\\{1da2e09b-199c-4def-9a99-93a8c1b8ddf2}\\python-3.11.9-amd64.exe",
     "title_hint": "python-3.11.9-amd64"
+  },
+  {
+    "name": "cmake",
+    "exe": "C:\\Program Files\\CMake\\bin\\cmake.exe",
+    "title_hint": "cmake"
+  },
+  {
+    "name": "cmcldeps",
+    "exe": "C:\\Program Files\\CMake\\bin\\cmcldeps.exe",
+    "title_hint": "cmcldeps"
+  },
+  {
+    "name": "cpack",
+    "exe": "C:\\Program Files\\CMake\\bin\\cpack.exe",
+    "title_hint": "cpack"
+  },
+  {
+    "name": "ctest",
+    "exe": "C:\\Program Files\\CMake\\bin\\ctest.exe",
+    "title_hint": "ctest"
   },
   {
     "name": "appvcleaner",

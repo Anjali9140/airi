@@ -201,12 +201,20 @@ function startLlama() {
 
 function startAgentServer() {
     const scriptPath = path.join(__dirname, '../agent-server', 'agent.py');
-    agentProcess = spawn("python", [scriptPath], {
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' }
+    const agentEnv   = { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' };
+
+    agentProcess = spawn("python", [scriptPath], { env: agentEnv });
+
+    agentProcess.on("error", (err) => {
+        console.error(`[Agent-Server] Failed to start:`, err.message);
     });
-    agentProcess.on("error", (err) => console.error(`[Agent-Server FAILED TO START]`, err));
-    agentProcess.stdout.on("data", (data) => console.log(`[Agent-Server] ${data}`));
-    agentProcess.stderr.on("data", (data) => console.error(`[Agent-Server ERROR] ${data}`));
+    agentProcess.on("close", (code) => {
+        if (code !== 0 && code !== null) {
+            console.error(`[Agent-Server] Exited with code ${code}`);
+        }
+    });
+    agentProcess.stdout.on("data", (data) => process.stdout.write(`[Agent-Server] ${data}`));
+    agentProcess.stderr.on("data", (data) => process.stderr.write(`[Agent-Server] ${data}`));
 }
 
 /**

@@ -4,18 +4,11 @@ import json
 import time
 import asyncio
 import logging
-import concurrent.futures
+import threading
 from contextvars import ContextVar
-from typing import Optional, List, Dict, Any, Callable
+from typing import Optional, List, Dict, Any
 from functools import wraps
 from threading import Lock
-
-logger = logging.getLogger(__name__)
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)-8s | %(name)s | %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
 
 # ── Force UTF-8 output (Windows emoji fix) ────────────────────────────────────
 if sys.stdout.encoding != 'utf-8':
@@ -23,31 +16,55 @@ if sys.stdout.encoding != 'utf-8':
 if sys.stderr.encoding != 'utf-8':
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
+# ── Logging Setup ─────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)-8s | %(name)s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
+
 # ── Set env vars before mem0 import ──────────────────────────────────────────
 os.environ.setdefault("OPENAI_API_KEY", "none")
 os.environ.setdefault("MEM0_TELEMETRY", "false")
 
 # ── Qwen Agent Framework Imports ─────────────────────────────────────────────
-from qwen_agent.agents import Assistant
-from qwen_agent.tools.base import BaseTool, register_tool
-from qwen_agent.llm.schema import Message, ContentItem
+try:
+    from qwen_agent.agents import Assistant
+    from qwen_agent.tools.base import BaseTool, register_tool
+    from qwen_agent.llm.schema import Message, ContentItem
+    logger.info("[startup] Qwen Agent framework loaded")
+except ImportError as e:
+    logger.critical(f"[startup] FATAL: qwen_agent not installed: {e}")
+    sys.exit(1)
 
 # ── FastAPI Imports ──────────────────────────────────────────────────────────
-from fastapi import FastAPI, Request, UploadFile, File
+from fastapi import FastAPI, Request, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import shutil
 
 # ── Memory Import ────────────────────────────────────────────────────────────
-from mem0 import Memory
+try:
+    from mem0 import Memory
+    logger.info("[startup] mem0 loaded")
+except ImportError as e:
+    logger.critical(f"[startup] FATAL: mem0 not installed: {e}")
+    sys.exit(1)
 
 # ── FlaUI Engine ──────────────────────────────────────────────────────────────
-from flaui import engine
+try:
+    from flaui import engine
+    logger.info("[startup] FlaUI engine loaded")
+except ImportError as e:
+    logger.critical(f"[startup] FATAL: flaui module not found: {e}")
+    sys.exit(1)
 
 # ── Model Configuration ──────────────────────────────────────────────────────
 modelName = "Qwen/Qwen3-VL-2B-Instruct-GGUF"
 
-# ── Mem0 DB dim-mismatch guard ────────────────────────────────────────────────
+# ── Mem0 DB Configuration ─────────────────────────────────────────────────────
 _MEM0_DB        = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".mem0_db")
 _EMBED_DIMS     = 768
 _COLLECTION     = "airi_memory"
@@ -55,11 +72,12 @@ _EMBED_MODEL    = "unsloth/embeddinggemma-300m-GGUF:Q4_0"
 _EMBED_BASE_URL = "http://127.0.0.1:11445/v1"
 
 # ── Wait for embedding server ─────────────────────────────────────────────────
-def _wait_for_embedding_server(max_retries=40, delay=0.5):
-    import time, requests
+def _wait_for_embedding_server(max_retries: int = 40, delay: float = 0.5) -> bool:
+    import requests
     for i in range(max_retries):
         try:
-            if requests.get("http://127.0.0.1:11445/health", timeout=1).status_code == 200:
+            r = requests.get("http://127.0.0.1:11445/health", timeout=1)
+            if r.status_code == 200:
                 logger.info("[mem0] Embedding server ready")
                 return True
         except Exception:
@@ -67,61 +85,69 @@ def _wait_for_embedding_server(max_retries=40, delay=0.5):
         if i == 0:
             logger.info("[mem0] Waiting for embedding server...")
         time.sleep(delay)
-    logger.warning("[mem0] Embedding server not ready after timeout")
+    logger.warning("[mem0] Embedding server not ready after timeout — continuing without it")
     return False
 
-def _probe_embedding_dims():
+
+def _probe_embedding_dims() -> int:
     import requests
     try:
-        data = requests.post(
+        resp = requests.post(
             f"{_EMBED_BASE_URL}/embeddings",
             json={"model": _EMBED_MODEL, "input": "test"},
             timeout=5,
-        ).json()
-        dims = len(data["data"][0]["embedding"])
+        )
+        resp.raise_for_status()
+        dims = len(resp.json()["data"][0]["embedding"])
         logger.info(f"[mem0] Embedder returns {dims} dims")
         return dims
     except Exception as e:
-        logger.warning(f"[mem0] Could not probe dims: {e}")
+        logger.warning(f"[mem0] Could not probe dims ({e}), using default {_EMBED_DIMS}")
         return _EMBED_DIMS
 
+
 def _ensure_qdrant_collection(dims: int):
-    from qdrant_client import QdrantClient
-    from qdrant_client.models import Distance, VectorParams
+    try:
+        from qdrant_client import QdrantClient
+        from qdrant_client.models import Distance, VectorParams
 
-    os.makedirs(_MEM0_DB, exist_ok=True)
-    client = QdrantClient(path=_MEM0_DB)
+        os.makedirs(_MEM0_DB, exist_ok=True)
+        client = QdrantClient(path=_MEM0_DB)
+        existing = {c.name for c in client.get_collections().collections}
 
-    existing = {c.name for c in client.get_collections().collections}
-
-    if _COLLECTION in existing:
-        info = client.get_collection(_COLLECTION)
-        vectors_config = info.config.params.vectors
-        if isinstance(vectors_config, dict):
-            current_dims = next(iter(vectors_config.values())).size
+        if _COLLECTION in existing:
+            info = client.get_collection(_COLLECTION)
+            vectors_config = info.config.params.vectors
+            current_dims = (
+                next(iter(vectors_config.values())).size
+                if isinstance(vectors_config, dict)
+                else vectors_config.size
+            )
+            if current_dims != dims:
+                logger.warning(f"[mem0] Dim mismatch ({current_dims} vs {dims}). Recreating collection.")
+                client.delete_collection(_COLLECTION)
+                client.create_collection(
+                    _COLLECTION,
+                    vectors_config=VectorParams(size=dims, distance=Distance.COSINE),
+                )
+                logger.info(f"[mem0] Collection recreated with {dims} dims")
+            else:
+                logger.info(f"[mem0] Collection OK ({dims} dims)")
         else:
-            current_dims = vectors_config.size
-        if current_dims != dims:
-            logger.warning(f"[mem0] Collection has {current_dims} dims, need {dims}. Recreating.")
-            client.delete_collection(_COLLECTION)
             client.create_collection(
                 _COLLECTION,
                 vectors_config=VectorParams(size=dims, distance=Distance.COSINE),
             )
-            logger.info(f"[mem0] Collection recreated with {dims} dims")
-        else:
-            logger.info(f"[mem0] Collection OK ({dims} dims)")
-    else:
-        client.create_collection(
-            _COLLECTION,
-            vectors_config=VectorParams(size=dims, distance=Distance.COSINE),
-        )
-        logger.info(f"[mem0] Collection created with {dims} dims")
+            logger.info(f"[mem0] Collection created with {dims} dims")
 
-    client.close()
+        client.close()
+    except Exception as e:
+        logger.error(f"[mem0] Qdrant collection setup failed: {e}")
+        raise
+
 
 # ── Init sequence ─────────────────────────────────────────────────────────────
-_wait_for_embedding_server()
+_embed_server_ready = _wait_for_embedding_server()
 _EMBED_DIMS = _probe_embedding_dims()
 _ensure_qdrant_collection(_EMBED_DIMS)
 
@@ -156,8 +182,12 @@ mem0_config = {
     }
 }
 
-mem_client = Memory.from_config(mem0_config)
-logger.info(f"[mem0] Ready — collection '{_COLLECTION}' @ {_EMBED_DIMS} dims")
+try:
+    mem_client = Memory.from_config(mem0_config)
+    logger.info(f"[mem0] Ready — collection '{_COLLECTION}' @ {_EMBED_DIMS} dims")
+except Exception as e:
+    logger.critical(f"[mem0] FATAL: Could not initialize Memory client: {e}")
+    sys.exit(1)
 
 # ── Request-Scoped Context Variables ─────────────────────────────────────────
 _current_user_id:    ContextVar[str] = ContextVar('user_id',    default='default_user')
@@ -167,8 +197,8 @@ _current_session_id: ContextVar[str] = ContextVar('session_id', default='default
 _RAG_EXTS = {'.pdf', '.docx', '.pptx', '.txt', '.csv', '.tsv', '.xlsx', '.xls', '.html'}
 _IMG_EXTS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'}
 
-# ── Helper Functions ─────────────────────────────────────────────────────────
-def _parse(params):
+# ── Helper: Safe param parser ─────────────────────────────────────────────────
+def _parse(params) -> Any:
     """Safely parse params: dict, JSON string, Python repr, or raw primitive."""
     if isinstance(params, (dict, list)):
         return params
@@ -183,14 +213,15 @@ def _parse(params):
         except Exception:
             return params
 
+
 def _get(params, key, default=None):
-    """Safely get a value from parsed params."""
     parsed = _parse(params)
     if isinstance(parsed, dict):
         return parsed.get(key, default)
     return default
 
-def _build_messages(raw_messages: list) -> list[Message]:
+
+def _build_messages(raw_messages: list) -> list:
     """Convert plain OpenAI-style dicts into proper Qwen-Agent Message objects."""
     result = []
     for m in raw_messages:
@@ -218,7 +249,7 @@ def _build_messages(raw_messages: list) -> list[Message]:
             continue
 
         text_part  = str(raw_content) if raw_content else ""
-        file_items: list[ContentItem] = []
+        file_items: list = []
 
         if "\nAttached files: " in text_part:
             idx       = text_part.index("\nAttached files: ")
@@ -239,14 +270,37 @@ def _build_messages(raw_messages: list) -> list[Message]:
 
     return result
 
+
+# ── Retry Decorator ───────────────────────────────────────────────────────────
+def retry_on_failure(max_retries: int = 3, delay: float = 1.0, backoff: float = 2.0):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_error = None
+            current_delay = delay
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_error = e
+                    if attempt < max_retries - 1:
+                        logger.warning(
+                            f"[retry] {func.__name__} attempt {attempt+1}/{max_retries} failed: {e}"
+                        )
+                        time.sleep(current_delay)
+                        current_delay *= backoff
+            logger.error(f"[retry] {func.__name__} exhausted {max_retries} attempts. Last error: {last_error}")
+            raise last_error
+        return wrapper
+    return decorator
+
 # ── FastAPI App ──────────────────────────────────────────────────────────────
 app = FastAPI(
     title="Airi Agent API",
     description="Friendly Windows Desktop AI Assistant powered by Qwen3-VL-2B",
-    version="2.1.0"
+    version="3.0.0"
 )
 
-from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -259,155 +313,65 @@ app.add_middleware(
 _SETTINGS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
 
 def _load_settings() -> dict:
-    defaults = {"model_server": "http://127.0.0.1:11434/v1", "model": "default", "api_key": "none", "thinking_enabled": True}
+    defaults = {
+        "model_server":     "http://127.0.0.1:11434/v1",
+        "model":            "default",
+        "api_key":          "none",
+        "thinking_enabled": True,
+    }
     if os.path.exists(_SETTINGS_PATH):
         try:
-            with open(_SETTINGS_PATH) as f:
+            with open(_SETTINGS_PATH, encoding="utf-8") as f:
                 saved = json.load(f)
             defaults.update(saved)
             logger.info(f"[settings] Loaded from {_SETTINGS_PATH}")
         except Exception as e:
-            logger.warning(f"[settings] Could not load settings.json: {e}")
+            logger.warning(f"[settings] Could not load settings.json: {e} — using defaults")
     return defaults
+
 
 def _save_settings(s: dict):
     try:
-        with open(_SETTINGS_PATH, "w") as f:
+        with open(_SETTINGS_PATH, "w", encoding="utf-8") as f:
             json.dump(s, f, indent=2)
+        logger.info("[settings] Saved")
     except Exception as e:
-        logger.warning(f"[settings] Could not save settings.json: {e}")
+        logger.warning(f"[settings] Could not save: {e}")
+
 
 _settings = _load_settings()
 
 # ── LLM Configuration ────────────────────────────────────────────────────────
-llm_cfg = {
-    "model":        _settings["model"],
-    "model_server": _settings["model_server"],
-    "api_key":      _settings.get("api_key", "none"),
-    "generate_cfg": {
-        "temperature": 0.5,
-        "top_p": 0.9,
-        "top_k": 20,
-        "presence_penalty": 0.5,
-        "max_tokens": 2048,
-        "repetition_penalty": 1.1,
-        "extra_body": {"enable_thinking": _settings.get("thinking_enabled", True)},
+def _build_llm_cfg(settings: dict) -> dict:
+    return {
+        "model":        settings["model"],
+        "model_server": settings["model_server"],
+        "api_key":      settings.get("api_key", "none"),
+        "generate_cfg": {
+            "temperature":        0.5,
+            "top_p":              0.9,
+            "top_k":              20,
+            "presence_penalty":   0.5,
+            "max_tokens":         2048,
+            "repetition_penalty": 1.1,
+            "extra_body":         {"enable_thinking": settings.get("thinking_enabled", True)},
+        }
     }
-}
 
-# ── Retry Decorator for Robust Tool Calls ─────────────────────────────────────
-def retry_on_failure(max_retries=3, delay=1.0, backoff=2.0, exceptions=(Exception,)):
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            last_error = None
-            current_delay = delay
-            for attempt in range(max_retries):
-                try:
-                    return func(*args, **kwargs)
-                except exceptions as e:
-                    last_error = e
-                    if attempt < max_retries - 1:
-                        logger.warning(f"[retry] {func.__name__} failed (attempt {attempt+1}/{max_retries}): {e}")
-                        time.sleep(current_delay)
-                        current_delay *= backoff
-            logger.error(f"[retry] {func.__name__} failed after {max_retries} attempts: {last_error}")
-            raise last_error
-        return wrapper
-    return decorator
+llm_cfg = _build_llm_cfg(_settings)
 
-# ── TOOL CALL VALIDATION ──────────────────────────────────────────────────────
-def _validate_tool_call(tool_name: str, params: dict) -> tuple[bool, str]:
-    """Validate tool parameters before execution."""
-    if tool_name == 'windows_launch':
-        if not params.get('app'):
-            return False, "app is required for windows_launch"
-    elif tool_name == 'windows_inspect':
-        if not params.get('app'):
-            return False, "app is required for windows_inspect"
-    elif tool_name == 'windows_do':
-        if not params.get('app'):
-            return False, "app is required for windows_do"
-        actions = params.get('actions', [])
-        if not isinstance(actions, list) or len(actions) == 0:
-            return False, "actions must be a non-empty list"
-    elif tool_name == 'file_op':
-        if not params.get('op'):
-            return False, "op is required for file_op"
-        if not params.get('path'):
-            return False, "path is required for file_op"
-    elif tool_name == 'add_memory':
-        if not params.get('content'):
-            return False, "content is required for add_memory"
-    elif tool_name == 'search_memories':
-        if not params.get('query'):
-            return False, "query is required for search_memories"
-    elif tool_name == 'get_memory':
-        if not params.get('memory_id'):
-            return False, "memory_id is required for get_memory"
-    elif tool_name == 'update_memory':
-        if not params.get('memory_id'):
-            return False, "memory_id is required for update_memory"
-        if not params.get('content'):
-            return False, "content is required for update_memory"
-    elif tool_name == 'delete_memory':
-        if not params.get('memory_id'):
-            return False, "memory_id is required for delete_memory"
-    return True, ""
+# ── Path alias resolver ───────────────────────────────────────────────────────
+def _resolve_path(path: str) -> str:
+    aliases = {
+        "desktop":   os.path.join(os.path.expanduser("~"), "Desktop"),
+        "downloads": os.path.join(os.path.expanduser("~"), "Downloads"),
+        "documents": os.path.join(os.path.expanduser("~"), "Documents"),
+        "pictures":  os.path.join(os.path.expanduser("~"), "Pictures"),
+    }
+    return aliases.get(path.lower().strip(), path)
 
-# ── CONTEXT WINDOW MANAGEMENT ─────────────────────────────────────────────────
-class ContextManager:
-    """Manages long conversation context with summarization."""
-    
-    def __init__(self, max_tokens=16000, summary_threshold=0.8):
-        self.max_tokens = max_tokens
-        self.summary_threshold = summary_threshold
-        self._lock = Lock()
-        self._message_history: List[Dict] = []
-        self._summary: Optional[str] = None
-    
-    def add_message(self, message: Dict):
-        with self._lock:
-            self._message_history.append(message)
-    
-    def get_context(self) -> List[Dict]:
-        with self._lock:
-            if self._summary:
-                return [{"role": "system", "content": f"Previous conversation summary: {self._summary}"}] + [
-                    m for m in self._message_history[-50:]  # Keep last 50 messages
-                ]
-            return self._message_history[-100:]  # Keep last 100 messages without summary
-    
-    def should_summarize(self) -> bool:
-        with self._lock:
-            # Simple token estimation: ~4 chars per token
-            total_chars = sum(len(str(m.get("content", ""))) for m in self._message_history)
-            return total_chars > self.max_tokens * 4 * self.summary_threshold
-    
-    def summarize(self):
-        """Create a summary of old messages to reduce context size."""
-        with self._lock:
-            if len(self._message_history) < 10:
-                return
-            
-            # Keep recent messages, summarize older ones
-            recent = self._message_history[-10:]
-            old = self._message_history[:-10]
-            
-            # Build summary prompt
-            summary_prompt = "Summarize this conversation history in 3-5 sentences:\n"
-            for m in old:
-                role = m.get("role", "unknown")
-                content = m.get("content", "")
-                summary_prompt += f"\n{role}: {content[:500]}..."
-            
-            self._summary = summary_prompt
-            self._message_history = recent
-            logger.info(f"[context] Summarized {len(old)} messages into summary")
+# ── TOOLS ─────────────────────────────────────────────────────────────────────
 
-_context_manager = ContextManager()
-
-# ── TOOL REGISTRATION ─────────────────────────────────────────────────────────
 @register_tool('windows_launch')
 class WindowsLaunch(BaseTool):
     description = 'Launch a Windows app by name. Returns already_running if already open.'
@@ -415,21 +379,23 @@ class WindowsLaunch(BaseTool):
         {'name': 'app',  'type': 'string', 'required': True,  'description': 'App name e.g. "chrome", "excel", "cmd"'},
         {'name': 'args', 'type': 'string', 'required': False, 'description': 'Optional command-line arguments'},
     ]
-    
+
     @retry_on_failure(max_retries=3, delay=0.5)
     def call(self, params: str, **kwargs) -> str:
         p    = _parse(params)
-        app  = p.get('app',  '') if isinstance(p, dict) else str(p)
-        args = p.get('args', '') if isinstance(p, dict) else ''
-        logger.info(f"[windows_launch] {app}")
+        app  = (p.get('app', '') if isinstance(p, dict) else str(p)).strip()
+        args = (p.get('args', '') if isinstance(p, dict) else '').strip()
         if not app:
+            logger.warning("[windows_launch] called without app name")
             return json.dumps({"status": "error", "detail": "app is required"})
+        logger.info(f"[windows_launch] launching '{app}' args='{args}'")
         try:
-            result = engine.launch_app(app, args or '')
+            result = engine.launch_app(app, args)
+            logger.info(f"[windows_launch] result: {result.get('status')}")
             return json.dumps(result)
         except Exception as e:
-            logger.error(f"[windows_launch] {e}")
-            return json.dumps({"status": "error", "detail": str(e)})
+            logger.error(f"[windows_launch] '{app}' failed: {e}")
+            return json.dumps({"status": "error", "detail": str(e), "app": app})
 
 
 @register_tool('windows_inspect')
@@ -440,20 +406,24 @@ class WindowsInspect(BaseTool):
         {'name': 'depth',        'type': 'integer', 'required': False, 'description': 'Tree depth (default 4)'},
         {'name': 'filter_types', 'type': 'string',  'required': False, 'description': 'Comma-separated control types e.g. "Button,Edit"'},
     ]
-    
+
     @retry_on_failure(max_retries=3, delay=0.5)
     def call(self, params: str, **kwargs) -> str:
         p            = _parse(params)
-        app          = p.get('app',          '') if isinstance(p, dict) else str(p)
-        depth        = int(p.get('depth') or 4)  if isinstance(p, dict) else 4
-        filter_types = p.get('filter_types', '') if isinstance(p, dict) else ''
-        logger.info(f"[windows_inspect] {app}")
+        app          = (p.get('app', '') if isinstance(p, dict) else str(p)).strip()
+        depth        = int(p.get('depth') or 4) if isinstance(p, dict) else 4
+        filter_types = (p.get('filter_types', '') if isinstance(p, dict) else '').strip()
+        if not app:
+            return json.dumps({"error": "app is required"})
+        logger.info(f"[windows_inspect] app='{app}' depth={depth} filter='{filter_types}'")
         try:
             result = engine.inspect_window(app, depth=depth, filter_types=filter_types)
+            element_count = len(result) if isinstance(result, list) else "?"
+            logger.info(f"[windows_inspect] returned {element_count} elements")
             return json.dumps(result)
         except Exception as e:
-            logger.error(f"[windows_inspect] {e}")
-            return json.dumps({"error": str(e)})
+            logger.error(f"[windows_inspect] '{app}' failed: {e}")
+            return json.dumps({"error": str(e), "app": app})
 
 
 @register_tool('windows_do')
@@ -463,12 +433,17 @@ class WindowsDo(BaseTool):
         {'name': 'app',     'type': 'string', 'required': True, 'description': 'Target app name'},
         {'name': 'actions', 'type': 'array',  'required': True, 'description': 'List of action dicts. Each has "action" key plus action-specific fields.'},
     ]
-    
+
     @retry_on_failure(max_retries=3, delay=0.5)
     def call(self, params: str, **kwargs) -> str:
         p       = _parse(params)
-        app     = p.get('app',     '') if isinstance(p, dict) else ''
+        app     = (p.get('app', '') if isinstance(p, dict) else '').strip()
         actions = p.get('actions', []) if isinstance(p, dict) else []
+
+        if not app:
+            return json.dumps({"error": "app is required"})
+
+        # Normalize actions if passed as string
         if isinstance(actions, str):
             try:
                 actions = json.loads(actions)
@@ -478,27 +453,22 @@ class WindowsDo(BaseTool):
                     actions = ast.literal_eval(actions)
                 except Exception:
                     return json.dumps({"error": "actions must be a JSON array"})
-        logger.info(f"[windows_do] {app} — {len(actions)} actions")
-        if not app:
-            return json.dumps({"error": "app is required"})
+
+        if not isinstance(actions, list) or len(actions) == 0:
+            return json.dumps({"error": "actions must be a non-empty list"})
+
+        logger.info(f"[windows_do] app='{app}' actions={len(actions)}")
         try:
             result = engine.execute_batch(app, actions)
+            errors = [r for r in (result if isinstance(result, list) else []) if r.get("status") == "error"]
+            if errors:
+                logger.warning(f"[windows_do] {len(errors)}/{len(actions)} actions failed")
+            else:
+                logger.info(f"[windows_do] all {len(actions)} actions completed")
             return json.dumps(result)
         except Exception as e:
-            logger.error(f"[windows_do] {e}")
-            return json.dumps({"error": str(e)})
-
-
-# ── Path alias resolver ───────────────────────────────────────────────────────
-def _resolve_path(path: str) -> str:
-    """Resolve special aliases to real Windows paths."""
-    aliases = {
-        "desktop":   os.path.join(os.path.expanduser("~"), "Desktop"),
-        "downloads": os.path.join(os.path.expanduser("~"), "Downloads"),
-        "documents": os.path.join(os.path.expanduser("~"), "Documents"),
-        "pictures":  os.path.join(os.path.expanduser("~"), "Pictures"),
-    }
-    return aliases.get(path.lower().strip(), path)
+            logger.error(f"[windows_do] '{app}' batch failed: {e}")
+            return json.dumps({"error": str(e), "app": app})
 
 
 @register_tool('file_op')
@@ -513,13 +483,19 @@ class FileOp(BaseTool):
 
     @retry_on_failure(max_retries=2, delay=0.3)
     def call(self, params: str, **kwargs) -> str:
-        import glob as _glob, shutil as _shutil
+        import glob as _glob
         p       = _parse(params)
-        op      = p.get('op',      '') if isinstance(p, dict) else str(p)
-        path    = _resolve_path(p.get('path', '') if isinstance(p, dict) else '')
-        dest    = _resolve_path(p.get('dest', '') if isinstance(p, dict) else '')
-        pattern = p.get('pattern', '') if isinstance(p, dict) else ''
-        logger.info(f"[file_op] {op} {path}")
+        op      = (p.get('op',   '') if isinstance(p, dict) else str(p)).strip()
+        path    = _resolve_path((p.get('path',    '') if isinstance(p, dict) else '').strip())
+        dest    = _resolve_path((p.get('dest',    '') if isinstance(p, dict) else '').strip())
+        pattern = (p.get('pattern', '') if isinstance(p, dict) else '').strip()
+
+        if not op:
+            return json.dumps({"error": "op is required"})
+        if not path:
+            return json.dumps({"error": "path is required"})
+
+        logger.info(f"[file_op] op='{op}' path='{path}'")
         try:
             if op == 'list':
                 if not os.path.exists(path):
@@ -535,6 +511,7 @@ class FileOp(BaseTool):
                         "modified": stat.st_mtime,
                         "ext":      os.path.splitext(name)[1].lstrip('.') if os.path.isfile(full) else None,
                     })
+                logger.info(f"[file_op] list returned {len(items)} items")
                 return json.dumps(items)
 
             elif op == 'open':
@@ -546,23 +523,27 @@ class FileOp(BaseTool):
             elif op == 'copy':
                 if not dest:
                     return json.dumps({"error": "dest is required for copy"})
+                if not os.path.exists(path):
+                    return json.dumps({"error": f"Source not found: {path}"})
                 if os.path.isdir(path):
-                    _shutil.copytree(path, dest)
+                    shutil.copytree(path, dest)
                 else:
-                    _shutil.copy2(path, dest)
+                    shutil.copy2(path, dest)
                 return json.dumps({"status": "copied", "from": path, "to": dest})
 
             elif op == 'move':
                 if not dest:
                     return json.dumps({"error": "dest is required for move"})
-                _shutil.move(path, dest)
+                if not os.path.exists(path):
+                    return json.dumps({"error": f"Source not found: {path}"})
+                shutil.move(path, dest)
                 return json.dumps({"status": "moved", "from": path, "to": dest})
 
             elif op == 'delete':
                 if not os.path.exists(path):
                     return json.dumps({"error": f"Path not found: {path}"})
                 if os.path.isdir(path):
-                    _shutil.rmtree(path)
+                    shutil.rmtree(path)
                 else:
                     os.remove(path)
                 return json.dumps({"status": "deleted", "path": path})
@@ -572,8 +553,10 @@ class FileOp(BaseTool):
                 return json.dumps({"status": "created", "path": path})
 
             elif op == 'search':
-                base    = path if path else os.path.expanduser("~")
-                pat     = pattern or '*'
+                base = path if path else os.path.expanduser("~")
+                pat  = pattern or '*'
+                if not os.path.exists(base):
+                    return json.dumps({"error": f"Search base not found: {base}"})
                 if '*' in pat or '?' in pat:
                     matches = _glob.glob(os.path.join(base, '**', pat), recursive=True)
                 else:
@@ -583,61 +566,55 @@ class FileOp(BaseTool):
                         for f in files + dirs
                         if pat.lower() in f.lower()
                     ]
+                logger.info(f"[file_op] search found {len(matches)} results")
                 return json.dumps(matches[:100])
 
             else:
-                return json.dumps({"error": f"Unknown op: {op}. Use list|open|copy|move|delete|create_folder|search"})
+                return json.dumps({"error": f"Unknown op: '{op}'. Valid: list|open|copy|move|delete|create_folder|search"})
 
+        except PermissionError as e:
+            logger.error(f"[file_op] Permission denied: {e}")
+            return json.dumps({"error": f"Permission denied: {e}"})
         except Exception as e:
-            logger.error(f"[file_op] {e}")
+            logger.error(f"[file_op] op='{op}' failed: {e}")
             return json.dumps({"error": str(e)})
+
+
+_INSTALLED_APPS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "installed_apps.json")
+
+
 @register_tool('list_installed_apps')
 class ListInstalledApps(BaseTool):
-    description = 'List installed Windows apps. Use to find app names before windows_launch.'
+    description = 'List installed Windows apps from the pre-built app index. Use to find app names before windows_launch.'
     parameters = []
 
-    @retry_on_failure(max_retries=2, delay=0.5)
     def call(self, params: str, **kwargs) -> str:
-        import subprocess
-        logger.info("[list_installed_apps] Enumerating apps")
+        logger.info("[list_installed_apps] reading installed_apps.json")
         try:
-            result = subprocess.run(
-                ['powershell', '-NoProfile', '-Command',
-                 'Get-StartApps | Select-Object Name, AppID | ConvertTo-Json'],
-                capture_output=True, text=True, timeout=15
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                raw = json.loads(result.stdout)
-                if isinstance(raw, dict):
-                    raw = [raw]
-                apps = [{"name": a.get("Name", ""), "app_id": a.get("AppID", "")} for a in raw if a.get("Name")]
-                logger.info(f"[list_installed_apps] Found {len(apps)} apps via PowerShell")
-                return json.dumps(apps)
-        except Exception as e:
-            logger.warning(f"[list_installed_apps] PowerShell failed: {e}")
-
-        try:
-            import glob as _glob
-            start_menu = os.path.join(os.environ.get("APPDATA", ""), r"Microsoft\Windows\Start Menu")
-            lnk_files  = _glob.glob(os.path.join(start_menu, "**", "*.lnk"), recursive=True)
-            apps = [{"name": os.path.splitext(os.path.basename(f))[0], "app_id": f} for f in lnk_files]
-            logger.info(f"[list_installed_apps] Found {len(apps)} apps via Start Menu scan")
+            with open(_INSTALLED_APPS_PATH, encoding="utf-8") as f:
+                apps = json.load(f)
+            logger.info(f"[list_installed_apps] {len(apps)} apps loaded")
             return json.dumps(apps)
+        except FileNotFoundError:
+            logger.error(f"[list_installed_apps] installed_apps.json not found at {_INSTALLED_APPS_PATH}")
+            return json.dumps({"error": "installed_apps.json not found — please restart the app to rebuild it"})
         except Exception as e:
-            logger.error(f"[list_installed_apps] fallback failed: {e}")
+            logger.error(f"[list_installed_apps] failed to read: {e}")
             return json.dumps({"error": str(e)})
 
+# ── Memory Tools ──────────────────────────────────────────────────────────────
 
 @register_tool('add_memory')
 class AddMemory(BaseTool):
-    description = "Save a fact or preference about the user to long-term memory. Use whenever the user shares personal info, preferences, or important facts."
+    description = "Save a fact or preference about the user to long-term memory."
     parameters = [
         {'name': 'content', 'type': 'string', 'required': True,
-         'description': "The fact or preference to remember (e.g. 'User prefers dark mode', 'User name is Ansh')"},
+         'description': "The fact or preference to remember (e.g. 'User prefers dark mode')"},
     ]
+
     def call(self, params: str, **kwargs) -> str:
         p       = _parse(params)
-        content = p.get('content', '') if isinstance(p, dict) else str(p)
+        content = (p.get('content', '') if isinstance(p, dict) else str(p)).strip()
         user_id = _current_user_id.get()
         if not content:
             return json.dumps({"error": "content is required"})
@@ -648,23 +625,26 @@ class AddMemory(BaseTool):
                 infer=False,
             )
             ids = [r.get("id") for r in result.get("results", [])]
-            logger.info(f"[add_memory] saved {len(ids)} memories for {user_id}")
+            logger.info(f"[add_memory] saved {len(ids)} memories for user='{user_id}'")
             return json.dumps({"saved": True, "ids": ids})
         except Exception as e:
             logger.error(f"[add_memory] error: {e}")
             return json.dumps({"error": str(e)})
+
+
 @register_tool('search_memories')
 class SearchMemories(BaseTool):
-    description = "Search user's long-term memories for relevant facts. Use at conversation start or when user asks about past preferences."
+    description = "Search user's long-term memories for relevant facts."
     parameters = [
         {'name': 'query', 'type': 'string', 'required': True,
          'description': "What to search for (e.g. 'user preferences', 'name', 'work')"},
         {'name': 'limit', 'type': 'integer',
          'description': "Max results to return (default 8)"},
     ]
+
     def call(self, params: str, **kwargs) -> str:
         p       = _parse(params)
-        query   = p.get('query', '') if isinstance(p, dict) else str(p)
+        query   = (p.get('query', '') if isinstance(p, dict) else str(p)).strip()
         limit   = int(p.get('limit', 8)) if isinstance(p, dict) else 8
         user_id = _current_user_id.get()
         if not query:
@@ -673,8 +653,8 @@ class SearchMemories(BaseTool):
             raw      = mem_client.search(query, user_id=user_id, limit=limit, threshold=0.15)
             items    = raw.get("results", []) if isinstance(raw, dict) else []
             memories = [{"id": r["id"], "memory": r["memory"]} for r in items if r.get("memory")]
-            logger.info(f"[search_memories] found {len(memories)} for '{query}'")
-            return json.dumps(memories) if memories else json.dumps([])
+            logger.info(f"[search_memories] '{query}' → {len(memories)} results")
+            return json.dumps(memories)
         except Exception as e:
             logger.error(f"[search_memories] error: {e}")
             return json.dumps({"error": str(e)})
@@ -687,6 +667,7 @@ class GetMemories(BaseTool):
         {'name': 'limit', 'type': 'integer',
          'description': "Max memories to return (default 50)"},
     ]
+
     def call(self, params: str, **kwargs) -> str:
         p       = _parse(params)
         limit   = int(p.get('limit', 50)) if isinstance(p, dict) else 50
@@ -695,7 +676,7 @@ class GetMemories(BaseTool):
             raw      = mem_client.get_all(user_id=user_id, limit=limit)
             items    = raw.get("results", []) if isinstance(raw, dict) else raw
             memories = [{"id": r["id"], "memory": r["memory"]} for r in items if r.get("memory")]
-            logger.info(f"[get_memories] {len(memories)} memories for {user_id}")
+            logger.info(f"[get_memories] {len(memories)} memories for user='{user_id}'")
             return json.dumps(memories)
         except Exception as e:
             logger.error(f"[get_memories] error: {e}")
@@ -709,14 +690,17 @@ class GetMemory(BaseTool):
         {'name': 'memory_id', 'type': 'string', 'required': True,
          'description': "The memory ID to retrieve"},
     ]
+
     def call(self, params: str, **kwargs) -> str:
         p         = _parse(params)
-        memory_id = p.get('memory_id', '') if isinstance(p, dict) else str(p)
+        memory_id = (p.get('memory_id', '') if isinstance(p, dict) else str(p)).strip()
         if not memory_id:
             return json.dumps({"error": "memory_id is required"})
         try:
             result = mem_client.get(memory_id)
-            return json.dumps(result) if result else json.dumps({"error": "Memory not found"})
+            if result:
+                return json.dumps(result)
+            return json.dumps({"error": f"Memory not found: {memory_id}"})
         except Exception as e:
             logger.error(f"[get_memory] error: {e}")
             return json.dumps({"error": str(e)})
@@ -731,12 +715,15 @@ class UpdateMemory(BaseTool):
         {'name': 'content',   'type': 'string', 'required': True,
          'description': "New content to replace the memory with"},
     ]
+
     def call(self, params: str, **kwargs) -> str:
         p         = _parse(params)
-        memory_id = p.get('memory_id', '') if isinstance(p, dict) else ''
-        content   = p.get('content',   '') if isinstance(p, dict) else ''
-        if not memory_id or not content:
-            return json.dumps({"error": "memory_id and content are required"})
+        memory_id = (p.get('memory_id', '') if isinstance(p, dict) else '').strip()
+        content   = (p.get('content',   '') if isinstance(p, dict) else '').strip()
+        if not memory_id:
+            return json.dumps({"error": "memory_id is required"})
+        if not content:
+            return json.dumps({"error": "content is required"})
         try:
             mem_client.update(memory_id, content)
             logger.info(f"[update_memory] updated {memory_id}")
@@ -753,9 +740,10 @@ class DeleteMemory(BaseTool):
         {'name': 'memory_id', 'type': 'string', 'required': True,
          'description': "The memory ID to delete"},
     ]
+
     def call(self, params: str, **kwargs) -> str:
         p         = _parse(params)
-        memory_id = p.get('memory_id', '') if isinstance(p, dict) else str(p)
+        memory_id = (p.get('memory_id', '') if isinstance(p, dict) else str(p)).strip()
         if not memory_id:
             return json.dumps({"error": "memory_id is required"})
         try:
@@ -771,80 +759,64 @@ class DeleteMemory(BaseTool):
 class DeleteAllMemories(BaseTool):
     description = "Delete ALL memories for the current user. Use only when user explicitly asks to forget everything."
     parameters = []
+
     def call(self, params: str, **kwargs) -> str:
         user_id = _current_user_id.get()
         try:
             mem_client.delete_all(user_id=user_id)
-            logger.info(f"[delete_all_memories] cleared all for {user_id}")
+            logger.info(f"[delete_all_memories] cleared all for user='{user_id}'")
             return json.dumps({"deleted": True, "user_id": user_id})
         except Exception as e:
             logger.error(f"[delete_all_memories] error: {e}")
             return json.dumps({"error": str(e)})
+
 # ── SYSTEM PROMPT ─────────────────────────────────────────────────────────────
-SYSTEM_PROMPT = """# 🌸 You are Airi — A Friendly Windows Desktop Assistant
+SYSTEM_PROMPT = """# You are Airi — A Friendly Windows Desktop Assistant
 
 You are Airi, a warm, helpful, and efficient AI companion for Windows users.
-Your goal is to make every task feel easy and enjoyable. ✨
+Your goal is to make every task feel easy and enjoyable.
 
-## 🎯 Your Personality
-- **Friendly & Warm**: Speak naturally, like a helpful friend. Use emojis sparingly (🌸✨✅) to add warmth.
-- **Clear & Simple**: Explain steps in plain language. Avoid technical jargon unless asked.
-- **Proactive & Thorough**: Anticipate follow-up needs. Confirm before destructive actions.
-- **Patient & Encouraging**: Never make users feel silly for asking. Celebrate small wins!
+## Your Personality
+- Friendly & Warm: Speak naturally, like a helpful friend. Use emojis sparingly to add warmth.
+- Clear & Simple: Explain steps in plain language. Avoid technical jargon unless asked.
+- Proactive & Thorough: Anticipate follow-up needs. Confirm before destructive actions.
+- Patient & Encouraging: Never make users feel silly for asking.
 
-## 🛠️ Your Capabilities
-- **Windows Apps**: Open, control, and automate any installed application via UI automation
-- **File Management**: List, open, copy, move, delete files and folders
-- **Documents & Images**: Analyze uploaded files automatically (PDF, Word, images, etc.)
-- **Memory**: Remember user preferences and important details across sessions
-- **Web Search**: Find current information when needed
+## Your Capabilities
+- Windows Apps: Open, control, and automate any installed application via UI automation
+- File Management: List, open, copy, move, delete files and folders
+- Documents & Images: Analyze uploaded files automatically (PDF, Word, images, etc.)
+- Memory: Remember user preferences and important details across sessions
 
-## 📋 Golden Rules
-1. **ONE tool at a time** — Call one tool, wait for result, then proceed.
-2. **Launch before interacting** — Use `windows_launch` if the app isn't open yet.
-3. **Inspect when unsure** — Use `windows_inspect` to discover element names before `windows_do`.
-4. **Batch actions** — Use `windows_do` with multiple actions in one call to minimize round-trips.
-5. **Read screen, not screenshots** — Use `read_screen` action in `windows_do` to read window content; it's faster than screenshots.
-6. **Save important info** — When user shares preferences/facts, use `add_memory`.
-7. **Check memory first** — At conversation start, use `search_memories` to retrieve relevant context.
-8. **Files are automatic** — Uploaded documents/images are analyzed directly (no tool needed).
-9. **Be honest about limits** — If something fails, explain clearly and suggest alternatives.
+## Golden Rules
+1. ONE tool at a time — Call one tool, wait for result, then proceed.
+2. Launch before interacting — Use windows_launch if the app isn't open yet.
+3. Inspect when unsure — Use windows_inspect to discover element names before windows_do.
+4. Batch actions — Use windows_do with multiple actions in one call to minimize round-trips.
+5. Read screen, not screenshots — Use read_screen action in windows_do; it's faster.
+6. Save important info — When user shares preferences/facts, use add_memory.
+7. Check memory first — At conversation start, use search_memories to retrieve relevant context.
+8. Files are automatic — Uploaded documents/images are analyzed directly (no tool needed).
+9. Be honest about limits — If something fails, explain clearly and suggest alternatives.
+10. Error recovery — When windows_do returns an error, check inspect_fallback in the result before retrying.
 
-## 🔧 Available Tools
+## Available Tools
 | Tool | When to Use |
 |------|-------------|
-| `windows_launch(app, args?)` | Open a Windows app by name |
-| `windows_inspect(app, depth?, filter_types?)` | Discover UI elements in a running app |
-| `windows_do(app, actions[])` | Execute UI actions (click, type, key, scroll, read, etc.) |
-| `file_op(op, path, dest?, pattern?)` | File operations: list/open/copy/move/delete/create_folder/search |
-| `list_installed_apps()` | List all installed apps to find the right name |
-| `web_search(query)` | Find current info online |
-| `add_memory(content)` | Save a fact about the user |
-| `search_memories(query)` | Find relevant past memories |
-| `get_memories()` | List all user memories |
-| `get_memory(memory_id)` | Get a specific memory by ID |
-| `update_memory(memory_id, content)` | Update an existing memory |
-| `delete_memory(memory_id)` | Delete a specific memory |
-| `delete_all_memories()` | Clear all user memories |
+| windows_launch(app, args?) | Open a Windows app by name |
+| windows_inspect(app, depth?, filter_types?) | Discover UI elements in a running app |
+| windows_do(app, actions[]) | Execute UI actions (click, type, key, scroll, read, etc.) |
+| file_op(op, path, dest?, pattern?) | File operations: list/open/copy/move/delete/create_folder/search |
+| list_installed_apps() | List all installed apps to find the right name |
+| add_memory(content) | Save a fact about the user |
+| search_memories(query) | Find relevant past memories |
+| get_memories() | List all user memories |
+| get_memory(memory_id) | Get a specific memory by ID |
+| update_memory(memory_id, content) | Update an existing memory |
+| delete_memory(memory_id) | Delete a specific memory |
+| delete_all_memories() | Clear all user memories |
 
-## 🔄 Typical Workflows
-
-**For App Tasks:**
-1. `windows_launch(app)` — open the app if not running
-2. `windows_inspect(app)` — discover element names (only if needed)
-3. `windows_do(app, actions[])` — perform all interactions in one batch
-
-**For File Tasks:**
-- List files: `file_op(op=list, path=desktop)`
-- Open a file: `file_op(op=open, path=<full path>)`
-- Search files: `file_op(op=search, path=documents, pattern=*.pdf)`
-
-**For Memory:**
-- Save new fact: `add_memory(content=<fact>)`
-- Find relevant context: `search_memories(query=<topic>)`
-- List all: `get_memories()`
-
-## 🎮 windows_do Action Types
+## windows_do Action Types
 | action | key fields | notes |
 |--------|-----------|-------|
 | click | target | left-click element |
@@ -855,13 +827,13 @@ Your goal is to make every task feel easy and enjoyable. ✨
 | scroll | target, direction, amount | up/down/left/right |
 | focus | target | set keyboard focus |
 | read | target | return element's text/value |
-| read_screen | — | return ALL visible text in window (preferred for reading content) |
+| read_screen | — | return ALL visible text in window (preferred) |
 | wait | ms | sleep N milliseconds |
 | screenshot | — | capture screen to file (use sparingly) |
 | close_app | — | close the window (must be explicit) |
 """
 
-# ── Skill Files — loaded into memory, injected per-request based on keywords ──
+# ── Skill Files ───────────────────────────────────────────────────────────────
 _AGENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def _load_skill(filename: str) -> str:
@@ -869,11 +841,11 @@ def _load_skill(filename: str) -> str:
     try:
         with open(path, encoding="utf-8") as f:
             return f.read().strip()
-    except Exception:
+    except Exception as e:
+        logger.warning(f"[skills] Could not load '{filename}': {e}")
         return ""
 
-# Each skill: (content, set-of-trigger-keywords)
-_SKILLS: list[tuple[str, set]] = [
+_SKILLS: list = [
     (
         _load_skill("WindowsAutomator.md"),
         {"windows", "app", "launch", "click", "type", "key", "inspect", "automat",
@@ -894,209 +866,323 @@ _SKILLS: list[tuple[str, set]] = [
 ]
 
 _loaded_skills = sum(1 for content, _ in _SKILLS if content)
-logger.info(f"[skills] Loaded {_loaded_skills}/3 skill files into memory")
+logger.info(f"[skills] Loaded {_loaded_skills}/3 skill files")
+
 
 def _build_system_prompt(user_text: str) -> str:
     """Return SYSTEM_PROMPT + any skill sections relevant to the user message."""
     if not user_text:
         return SYSTEM_PROMPT
     lower = user_text.lower()
-    sections = []
-    for content, keywords in _SKILLS:
-        if content and any(kw in lower for kw in keywords):
-            sections.append(content)
+    sections = [content for content, keywords in _SKILLS if content and any(kw in lower for kw in keywords)]
     if not sections:
         return SYSTEM_PROMPT
     skill_block = "\n\n---\n\n".join(sections)
-    return f"{SYSTEM_PROMPT}\n\n---\n\n## 📖 Skill Reference\n\n{skill_block}"
+    return f"{SYSTEM_PROMPT}\n\n---\n\n## Skill Reference\n\n{skill_block}"
+
+
 # ── Agent Initialization ─────────────────────────────────────────────────────
-airi = Assistant(
-    llm=llm_cfg,
-    system_message=SYSTEM_PROMPT,
-    function_list=[
-        'windows_launch', 'windows_inspect', 'windows_do',
-        'file_op', 'list_installed_apps',
-        'add_memory', 'search_memories', 'get_memories', 'get_memory',
-        'update_memory', 'delete_memory', 'delete_all_memories',
-    ],
-)
+_TOOL_LIST = [
+    'windows_launch', 'windows_inspect', 'windows_do',
+    'file_op', 'list_installed_apps',
+    'add_memory', 'search_memories', 'get_memories', 'get_memory',
+    'update_memory', 'delete_memory', 'delete_all_memories',
+]
+
+_agent_lock = Lock()
+_airi: Optional[Assistant] = None
+
+
+def _get_agent() -> Assistant:
+    """Get or create the agent instance (thread-safe)."""
+    global _airi
+    with _agent_lock:
+        if _airi is None:
+            logger.info("[agent] Initializing Airi assistant...")
+            try:
+                _airi = Assistant(
+                    llm=llm_cfg,
+                    system_message=SYSTEM_PROMPT,
+                    function_list=_TOOL_LIST,
+                )
+                logger.info("[agent] Airi ready")
+            except Exception as e:
+                logger.critical(f"[agent] Failed to initialize: {e}")
+                raise
+        return _airi
+
+
+def _reload_agent():
+    """Force re-create the agent (e.g. after settings change)."""
+    global _airi
+    with _agent_lock:
+        logger.info("[agent] Reloading agent with new settings...")
+        try:
+            _airi = Assistant(
+                llm=_build_llm_cfg(_settings),
+                system_message=SYSTEM_PROMPT,
+                function_list=_TOOL_LIST,
+            )
+            logger.info("[agent] Agent reloaded successfully")
+        except Exception as e:
+            logger.error(f"[agent] Reload failed: {e}")
+            raise
+
+
+# Initialize on startup
+try:
+    _get_agent()
+except Exception as e:
+    logger.critical(f"[startup] Agent initialization failed: {e}")
+    sys.exit(1)
 
 # ── FastAPI Endpoints ────────────────────────────────────────────────────────
 
+def _msg_role(m) -> str:
+    """Get role from a Qwen-agent Message (attribute) or plain dict (key)."""
+    return getattr(m, "role", None) or (m.get("role", "") if isinstance(m, dict) else "")
+
+
+def _msg_content(m):
+    """Get content from a Qwen-agent Message (attribute) or plain dict (key)."""
+    return getattr(m, "content", None) or (m.get("content") if isinstance(m, dict) else None) or ""
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
-    data        = await request.json()
-    raw_messages = data.get("messages", [])
-    user_id     = data.get("user_id",    "default_user")
-    session_id  = data.get("session_id", "default_session")
+    try:
+        data = await request.json()
+    except Exception as e:
+        logger.error(f"[chat] Failed to parse request body: {e}")
+        return StreamingResponse(
+            iter([f"data: {json.dumps({'error': 'Invalid JSON body'})}\n\ndata: [DONE]\n\n"]),
+            media_type="text/event-stream"
+        )
 
-    _current_user_id.set(user_id)
-    _current_session_id.set(session_id)
+    raw_messages = data.get("messages", [])
+    user_id      = data.get("user_id",    "default_user")
+    session_id   = data.get("session_id", "default_session")
 
     messages = _build_messages(raw_messages)
 
     # Extract last user text for skill keyword matching
-    _last_user_text = ""
+    last_user_text = ""
     for m in reversed(raw_messages):
         if m.get("role") == "user":
             c = m.get("content", "")
-            _last_user_text = c if isinstance(c, str) else " ".join(
+            last_user_text = c if isinstance(c, str) else " ".join(
                 p.get("text", "") for p in c if isinstance(p, dict)
             )
             break
 
+    # Build run_messages here (in async context) before handing off to thread
+    sys_prompt   = _build_system_prompt(last_user_text)
+    run_messages = [Message("system", sys_prompt)] + [
+        m for m in messages if _msg_role(m) != "system"
+    ]
+
     def stream_gen():
         import re as _re
+
+        # Re-set ContextVars inside the generator thread
         _current_user_id.set(user_id)
         _current_session_id.set(session_id)
 
-        # Build per-request system prompt with relevant skill sections injected
-        _sys = _build_system_prompt(_last_user_text)
-        _run_messages = [Message("system", _sys)] + [
-            m for m in messages if m.get("role") != "system"
-        ]
-
-        prev_content  = ""
         chunk_id      = f"chatcmpl-{int(time.time())}"
         seen_tool_ids = set()
+        prev_content  = ""
 
         def _tool_event(tool_name: str, detail: str = "") -> str:
-            """Emit a custom SSE event so the frontend can show the AgentLoader status."""
             payload = json.dumps({"tool": tool_name, "detail": detail}, ensure_ascii=False)
             return f"event: tool_call\ndata: {payload}\n\n"
 
+        def _text_chunk(delta: str) -> str:
+            chunk = {
+                "id":      chunk_id,
+                "object":  "chat.completion.chunk",
+                "created": int(time.time()),
+                "model":   modelName,
+                "choices": [{"index": 0, "delta": {"content": delta}, "finish_reason": None}],
+            }
+            return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+
         try:
-            for response in airi.run(_run_messages):
+            agent = _get_agent()
+
+            for response in agent.run(run_messages):
                 if not response:
                     continue
 
-                # ── Detect tool calls / tool results in this response snapshot ──
+                # ── Detect and emit tool call / tool result events ─────────────
                 for m in response:
-                    role = m.get("role", "")
+                    role    = _msg_role(m)
+                    content = _msg_content(m)
 
-                    # assistant message that contains a function_call
-                    if role == "assistant":
-                        content = m.get("content") or ""
-                        # Qwen-agent stores tool calls as list items with type "function"
-                        if isinstance(content, list):
-                            for item in content:
-                                if not isinstance(item, dict):
-                                    continue
-                                fn = item.get("function") or item.get("name") or ""
-                                call_id = item.get("id") or item.get("call_id") or fn
-                                if fn and call_id not in seen_tool_ids:
-                                    seen_tool_ids.add(call_id)
-                                    yield _tool_event(fn)
+                    if role == "assistant" and isinstance(content, list):
+                        for item in content:
+                            if not isinstance(item, dict):
+                                continue
+                            # Qwen-agent stores tool calls as {"function": "name", "id": "..."}
+                            # or {"name": "...", "call_id": "..."}
+                            fn      = item.get("function") or item.get("name") or ""
+                            call_id = item.get("id") or item.get("call_id") or fn
+                            if fn and call_id not in seen_tool_ids:
+                                seen_tool_ids.add(call_id)
+                                logger.info(f"[stream] → tool call: {fn}")
+                                yield _tool_event(fn)
 
-                    # tool result message — the tool already ran
                     elif role == "tool":
-                        tool_name = m.get("name") or m.get("tool_call_id") or "tool"
-                        call_id   = m.get("tool_call_id") or tool_name
-                        result_id = f"result_{call_id}"
+                        # tool_call_id links back to the assistant's call
+                        tool_name = (
+                            getattr(m, "name", None)
+                            or (m.get("name") if isinstance(m, dict) else None)
+                            or getattr(m, "tool_call_id", None)
+                            or (m.get("tool_call_id") if isinstance(m, dict) else None)
+                            or "tool"
+                        )
+                        result_id = f"result_{tool_name}"
                         if result_id not in seen_tool_ids:
                             seen_tool_ids.add(result_id)
+                            logger.info(f"[stream] ✓ tool done: {tool_name}")
                             yield _tool_event(tool_name, "done")
 
                 # ── Stream assistant text delta ────────────────────────────────
-                assistant_msgs = [m for m in response if m.get("role") == "assistant"]
+                assistant_msgs = [m for m in response if _msg_role(m) == "assistant"]
                 if not assistant_msgs:
                     continue
-                last = assistant_msgs[-1]
 
-                raw = last.get("content") or ""
+                raw = _msg_content(assistant_msgs[-1])
                 if isinstance(raw, list):
                     full_content = " ".join(
-                        c.get("text", "") for c in raw
-                        if isinstance(c, dict) and c.get("text")
+                        item.get("text", "") if isinstance(item, dict)
+                        else (getattr(item, "text", "") or "")
+                        for item in raw
+                        if (item.get("text") if isinstance(item, dict) else getattr(item, "text", None))
                     )
                 else:
-                    full_content = str(raw)
+                    full_content = str(raw) if raw else ""
 
-                # Strip <think>...</think> blocks
+                # Strip <think>...</think> blocks (Qwen3 thinking mode)
                 if "<think>" in full_content:
                     full_content = _re.sub(r"<think>.*?</think>", "", full_content, flags=_re.DOTALL).strip()
 
                 delta = full_content[len(prev_content):]
                 prev_content = full_content
-                if not delta:
-                    continue
+                if delta:
+                    yield _text_chunk(delta)
 
-                chunk = {
-                    "id": chunk_id,
-                    "object": "chat.completion.chunk",
-                    "created": int(time.time()),
-                    "model": modelName,
-                    "choices": [{"index": 0, "delta": {"content": delta}, "finish_reason": None}],
-                }
-                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-
-            # Final chunk
-            yield f"data: {json.dumps({'id': chunk_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': modelName, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
             yield "data: [DONE]\n\n"
 
         except Exception as e:
-            logger.error(f"[chat_completions] stream error: {e}")
-            err = {"id": chunk_id, "object": "chat.completion.chunk", "created": int(time.time()),
-                   "model": modelName,
-                   "choices": [{"index": 0, "delta": {"content": f"\n\n⚠️ Error: {e}"}, "finish_reason": "error"}]}
-            yield f"data: {json.dumps(err)}\n\n"
+            logger.error(f"[chat] Stream error: {e}", exc_info=True)
+            yield _text_chunk(f"\n\n⚠️ Something went wrong: {e}")
             yield "data: [DONE]\n\n"
 
     return StreamingResponse(stream_gen(), media_type="text/event-stream")
+
+
+# ── Settings Endpoints ────────────────────────────────────────────────────────
+
+class SettingsPayload(BaseModel):
+    model_server:     Optional[str]  = None
+    model:            Optional[str]  = None
+    api_key:          Optional[str]  = None
+    thinking_enabled: Optional[bool] = None
+
+
+@app.get("/settings")
+async def get_settings():
+    return _settings
+
+
+@app.post("/settings")
+async def update_settings(payload: SettingsPayload):
+    global _settings, llm_cfg
+    updates = payload.model_dump(exclude_none=True)
+    if not updates:
+        return {"status": "no_changes", "settings": _settings}
+    _settings.update(updates)
+    llm_cfg = _build_llm_cfg(_settings)
+    _save_settings(_settings)
+    try:
+        _reload_agent()
+        return {"status": "updated", "settings": _settings}
+    except Exception as e:
+        logger.error(f"[settings] Agent reload failed after update: {e}")
+        return {"status": "settings_saved_but_agent_reload_failed", "error": str(e), "settings": _settings}
+
+
+# ── File Upload ───────────────────────────────────────────────────────────────
+
 USER_STUFF_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_stuff")
 os.makedirs(USER_STUFF_DIR, exist_ok=True)
+
 
 @app.post("/upload")
 async def upload_files(files: list[UploadFile] = File(...)):
     saved = []
+    errors = []
     for f in files:
-        dest = os.path.join(USER_STUFF_DIR, f.filename)
-        base, ext = os.path.splitext(f.filename)
-        counter = 1
-        while os.path.exists(dest):
-            dest = os.path.join(USER_STUFF_DIR, f"{base}_{counter}{ext}")
-            counter += 1
-        with open(dest, "wb") as out:
-            shutil.copyfileobj(f.file, out)
-        saved.append(dest)
-        logger.info(f"[upload] Saved: {dest}")
-    return {"paths": saved, "count": len(saved)}
+        try:
+            dest = os.path.join(USER_STUFF_DIR, f.filename)
+            base, ext = os.path.splitext(f.filename)
+            counter = 1
+            while os.path.exists(dest):
+                dest = os.path.join(USER_STUFF_DIR, f"{base}_{counter}{ext}")
+                counter += 1
+            with open(dest, "wb") as out:
+                shutil.copyfileobj(f.file, out)
+            saved.append(dest)
+            logger.info(f"[upload] Saved: {dest}")
+        except Exception as e:
+            logger.error(f"[upload] Failed to save '{f.filename}': {e}")
+            errors.append({"file": f.filename, "error": str(e)})
+    return {"paths": saved, "count": len(saved), "errors": errors}
 
+
+# ── Whisper STT ───────────────────────────────────────────────────────────────
 
 _whisper_model = None
+_whisper_lock  = Lock()
+
 
 def _get_whisper():
     global _whisper_model
-    if _whisper_model is None:
-        from faster_whisper import WhisperModel
-        from huggingface_hub import try_to_load_from_cache
-        cached = try_to_load_from_cache("Systran/faster-whisper-tiny", "model.bin")
-        is_cached = cached is not None and not isinstance(cached, type(None))
-        if is_cached:
-            os.environ["HF_HUB_OFFLINE"] = "1"
-            _whisper_model = WhisperModel("tiny", device="cpu", compute_type="int8", local_files_only=True)
-            logger.info("[whisper] Loaded from local cache (offline)")
-        else:
-            logger.info("[whisper] First run — downloading tiny model (~75MB)...")
-            _whisper_model = WhisperModel("tiny", device="cpu", compute_type="int8")
-            logger.info("[whisper] Model downloaded and cached")
+    with _whisper_lock:
+        if _whisper_model is None:
+            try:
+                from faster_whisper import WhisperModel
+                from huggingface_hub import try_to_load_from_cache
+                cached    = try_to_load_from_cache("Systran/faster-whisper-tiny", "model.bin")
+                is_cached = cached is not None and not isinstance(cached, type(None))
+                if is_cached:
+                    os.environ["HF_HUB_OFFLINE"] = "1"
+                    _whisper_model = WhisperModel("tiny", device="cpu", compute_type="int8", local_files_only=True)
+                    logger.info("[whisper] Loaded from local cache (offline)")
+                else:
+                    logger.info("[whisper] Downloading tiny model (~75MB)...")
+                    _whisper_model = WhisperModel("tiny", device="cpu", compute_type="int8")
+                    logger.info("[whisper] Model downloaded and cached")
+            except Exception as e:
+                logger.error(f"[whisper] Failed to load model: {e}")
+                raise
     return _whisper_model
 
+
 def _prewarm_whisper():
-    """Load whisper in background at startup so first transcribe call is instant."""
-    import threading
     def _load():
         try:
             _get_whisper()
+            logger.info("[whisper] Pre-warm complete")
         except Exception as e:
             logger.warning(f"[whisper] Pre-warm failed: {e}")
     threading.Thread(target=_load, daemon=True).start()
 
 _prewarm_whisper()
 
+
 @app.post("/transcribe")
 async def transcribe_audio(file: UploadFile = File(...)):
-    """Transcribe a single audio blob (fallback for non-streaming use)."""
     import tempfile
     try:
         suffix = os.path.splitext(file.filename or "audio.webm")[1] or ".webm"
@@ -1107,14 +1193,13 @@ async def transcribe_audio(file: UploadFile = File(...)):
         segments, _ = model.transcribe(tmp_path, language="en", beam_size=1, vad_filter=True)
         text = " ".join(seg.text.strip() for seg in segments).strip()
         os.unlink(tmp_path)
+        logger.info(f"[transcribe] result: '{text[:80]}...' " if len(text) > 80 else f"[transcribe] result: '{text}'")
         return {"text": text}
     except Exception as e:
-        logger.error(f"[transcribe] {e}")
+        logger.error(f"[transcribe] failed: {e}")
         return {"text": "", "error": str(e)}
 
-
-from fastapi import WebSocket, WebSocketDisconnect
-import wave, struct, io, threading, queue
+# ── WebSocket Real-Time Transcription ─────────────────────────────────────────
 
 @app.websocket("/ws/transcribe")
 async def ws_transcribe(websocket: WebSocket):
@@ -1127,18 +1212,45 @@ async def ws_transcribe(websocket: WebSocket):
     await websocket.accept()
     logger.info("[ws_transcribe] Client connected")
 
-    model = _get_whisper()
-    audio_queue: queue.Queue = queue.Queue()
-    result_queue: queue.Queue = queue.Queue()
-    running = True
+    try:
+        model = _get_whisper()
+    except Exception as e:
+        logger.error(f"[ws_transcribe] Whisper unavailable: {e}")
+        await websocket.send_json({"type": "error", "text": f"Whisper unavailable: {e}"})
+        await websocket.close()
+        return
+
+    import wave, io, queue
 
     SAMPLE_RATE   = 16000
     CHANNELS      = 1
     SAMPLE_WIDTH  = 2
     CHUNK_SAMPLES = int(SAMPLE_RATE * 1.2)
 
+    audio_queue:  queue.Queue = queue.Queue()
+    result_queue: queue.Queue = queue.Queue()
+    running = True
+
+    def _transcribe_pcm(pcm: bytes, label: str) -> Optional[str]:
+        try:
+            wav_io = io.BytesIO()
+            with wave.open(wav_io, "wb") as wf:
+                wf.setnchannels(CHANNELS)
+                wf.setsampwidth(SAMPLE_WIDTH)
+                wf.setframerate(SAMPLE_RATE)
+                wf.writeframes(pcm)
+            wav_io.seek(0)
+            segments, _ = model.transcribe(
+                wav_io, language="en", beam_size=1,
+                vad_filter=True, vad_parameters={"min_silence_duration_ms": 300}
+            )
+            text = " ".join(s.text.strip() for s in segments).strip()
+            return text or None
+        except Exception as e:
+            logger.error(f"[ws_transcribe] {label} error: {e}")
+            return None
+
     def transcribe_worker():
-        """Background thread: drains audio_queue, transcribes, pushes results."""
         buf = b""
         while running:
             try:
@@ -1147,46 +1259,17 @@ async def ws_transcribe(websocket: WebSocket):
                     break
                 buf += chunk
                 if len(buf) >= CHUNK_SAMPLES * SAMPLE_WIDTH:
-                    pcm = buf
-                    buf = b""
-                    try:
-                        wav_io = io.BytesIO()
-                        with wave.open(wav_io, "wb") as wf:
-                            wf.setnchannels(CHANNELS)
-                            wf.setsampwidth(SAMPLE_WIDTH)
-                            wf.setframerate(SAMPLE_RATE)
-                            wf.writeframes(pcm)
-                        wav_io.seek(0)
-                        segments, _ = model.transcribe(
-                            wav_io, language="en", beam_size=1,
-                            vad_filter=True, vad_parameters={"min_silence_duration_ms": 300}
-                        )
-                        text = " ".join(s.text.strip() for s in segments).strip()
-                        if text:
-                            result_queue.put({"type": "interim", "text": text})
-                    except Exception as e:
-                        logger.error(f"[ws_transcribe] transcribe error: {e}")
+                    pcm, buf = buf, b""
+                    text = _transcribe_pcm(pcm, "chunk")
+                    if text:
+                        result_queue.put({"type": "interim", "text": text})
             except queue.Empty:
+                # Flush remaining buffer on silence
                 if len(buf) > SAMPLE_RATE * SAMPLE_WIDTH * 0.3:
-                    pcm = buf
-                    buf = b""
-                    try:
-                        wav_io = io.BytesIO()
-                        with wave.open(wav_io, "wb") as wf:
-                            wf.setnchannels(CHANNELS)
-                            wf.setsampwidth(SAMPLE_WIDTH)
-                            wf.setframerate(SAMPLE_RATE)
-                            wf.writeframes(pcm)
-                        wav_io.seek(0)
-                        segments, _ = model.transcribe(
-                            wav_io, language="en", beam_size=1,
-                            vad_filter=True, vad_parameters={"min_silence_duration_ms": 300}
-                        )
-                        text = " ".join(s.text.strip() for s in segments).strip()
-                        if text:
-                            result_queue.put({"type": "final", "text": text})
-                    except Exception as e:
-                        logger.error(f"[ws_transcribe] flush error: {e}")
+                    pcm, buf = buf, b""
+                    text = _transcribe_pcm(pcm, "flush")
+                    if text:
+                        result_queue.put({"type": "final", "text": text})
 
     worker = threading.Thread(target=transcribe_worker, daemon=True)
     worker.start()
@@ -1210,13 +1293,43 @@ async def ws_transcribe(websocket: WebSocket):
                 break
             if "bytes" in msg and msg["bytes"]:
                 audio_queue.put(msg["bytes"])
-            elif "text" in msg and msg["text"] == "stop":
+            elif "text" in msg and msg.get("text") == "stop":
                 break
     except WebSocketDisconnect:
         pass
+    except Exception as e:
+        logger.error(f"[ws_transcribe] Unexpected error: {e}")
     finally:
         running = False
         audio_queue.put(None)
         send_task.cancel()
         worker.join(timeout=2)
         logger.info("[ws_transcribe] Client disconnected")
+
+
+# ── Health Check ──────────────────────────────────────────────────────────────
+
+@app.get("/health")
+async def health():
+    return {
+        "status":        "ok",
+        "model":         _settings.get("model"),
+        "model_server":  _settings.get("model_server"),
+        "embed_dims":    _EMBED_DIMS,
+        "embed_ready":   _embed_server_ready,
+        "skills_loaded": _loaded_skills,
+        "memory_collection": _COLLECTION,
+    }
+
+
+# ── Entrypoint ────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    import uvicorn
+    logger.info("[startup] Starting Airi agent server on port 11435")
+    uvicorn.run(
+        app,
+        host="127.0.0.1",
+        port=11435,
+        log_level="info",
+        access_log=False,
+    )
