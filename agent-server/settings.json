@@ -2,5 +2,6 @@
   "model_server": "http://127.0.0.1:11434/v1",
   "model": "default",
   "api_key": "none",
-  "thinking_enabled": true
+  "thinking_enabled": true,
+  "theme": "Day"
 }

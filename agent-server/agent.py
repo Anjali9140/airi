@@ -318,6 +318,7 @@ def _load_settings() -> dict:
         "model":            "default",
         "api_key":          "none",
         "thinking_enabled": True,
+        "theme":            "Night",
     }
     if os.path.exists(_SETTINGS_PATH):
         try:
@@ -953,18 +954,22 @@ def _get_agent() -> Assistant:
 def _reload_agent():
     """Force re-create the agent (e.g. after settings change)."""
     global _airi
-    with _agent_lock:
-        logger.info("[agent] Reloading agent with new settings...")
-        try:
-            _airi = Assistant(
-                llm=_build_llm_cfg(_settings),
-                system_message=SYSTEM_PROMPT,
-                function_list=_TOOL_LIST,
-            )
-            logger.info("[agent] Agent reloaded successfully")
-        except Exception as e:
-            logger.error(f"[agent] Reload failed: {e}")
-            raise
+    # Build new config first (outside lock) to minimize lock hold time
+    new_cfg = _build_llm_cfg(_settings)
+    logger.info("[agent] Reloading agent with new settings...")
+    try:
+        new_agent = Assistant(
+            llm=new_cfg,
+            system_message=SYSTEM_PROMPT,
+            function_list=_TOOL_LIST,
+        )
+        # Swap atomically under lock
+        with _agent_lock:
+            _airi = new_agent
+        logger.info("[agent] Agent reloaded successfully")
+    except Exception as e:
+        logger.error(f"[agent] Reload failed: {e}")
+        raise
 
 
 # Initialize on startup
@@ -1145,6 +1150,7 @@ class SettingsPayload(BaseModel):
     model:            Optional[str]  = None
     api_key:          Optional[str]  = None
     thinking_enabled: Optional[bool] = None
+    theme:            Optional[str]  = None  # "Day" | "Night"
 
 
 @app.get("/settings")
@@ -1159,20 +1165,115 @@ async def update_settings(payload: SettingsPayload):
     if not updates:
         return {"status": "no_changes", "settings": _settings}
     _settings.update(updates)
-    llm_cfg = _build_llm_cfg(_settings)
     _save_settings(_settings)
-    try:
-        _reload_agent()
-        return {"status": "updated", "settings": _settings}
-    except Exception as e:
-        logger.error(f"[settings] Agent reload failed after update: {e}")
-        return {"status": "settings_saved_but_agent_reload_failed", "error": str(e), "settings": _settings}
+    # Only rebuild LLM config and reload agent if inference settings changed
+    inference_keys = {"model_server", "model", "api_key", "thinking_enabled"}
+    if updates.keys() & inference_keys:
+        llm_cfg = _build_llm_cfg(_settings)
+        import asyncio
+        loop = asyncio.get_event_loop()
+        try:
+            # Run blocking _reload_agent in a thread pool to avoid blocking the event loop
+            await loop.run_in_executor(None, _reload_agent)
+        except Exception as e:
+            logger.error(f"[settings] Agent reload failed after update: {e}")
+            return {"status": "settings_saved_but_agent_reload_failed", "error": str(e), "settings": _settings}
+    return {"status": "updated", "settings": _settings}
 
 
 # ── File Upload ───────────────────────────────────────────────────────────────
 
 USER_STUFF_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_stuff")
 os.makedirs(USER_STUFF_DIR, exist_ok=True)
+
+_IMG_EXTS_SET = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'}
+_DOC_EXTS_SET = {'.pdf', '.doc', '.docx', '.txt', '.csv', '.xlsx', '.xls', '.json', '.pptx', '.html', '.md'}
+
+
+@app.get("/library")
+async def list_library():
+    """List all files in user_stuff, split into documents and media."""
+    docs, media = [], []
+    if not os.path.exists(USER_STUFF_DIR):
+        return {"documents": [], "media": []}
+    for fname in sorted(os.listdir(USER_STUFF_DIR)):
+        fpath = os.path.join(USER_STUFF_DIR, fname)
+        if not os.path.isfile(fpath):
+            continue
+        ext  = os.path.splitext(fname)[1].lower()
+        stat = os.stat(fpath)
+        info = {"name": fname, "size": stat.st_size, "modified": stat.st_mtime, "ext": ext.lstrip(".")}
+        if ext in _IMG_EXTS_SET:
+            media.append(info)
+        else:
+            docs.append(info)
+    return {"documents": docs, "media": media}
+
+
+@app.delete("/library/{filename}")
+async def delete_library_file(filename: str):
+    """Delete a file from user_stuff by name."""
+    safe_name = os.path.basename(filename)
+    fpath = os.path.join(USER_STUFF_DIR, safe_name)
+    if not os.path.exists(fpath):
+        return {"success": False, "error": "File not found"}
+    try:
+        os.remove(fpath)
+        logger.info(f"[library] Deleted: {safe_name}")
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"[library] Delete error: {e}")
+        return {"success": False, "error": str(e)}
+
+
+from fastapi.responses import FileResponse as _FileResponse
+
+
+@app.get("/library/file/{filename}")
+async def serve_library_file(filename: str):
+    """Serve a file from user_stuff for inline preview."""
+    safe_name = os.path.basename(filename)
+    fpath = os.path.join(USER_STUFF_DIR, safe_name)
+    if not os.path.exists(fpath):
+        return {"error": "File not found"}
+    return _FileResponse(fpath)
+
+
+# ── Memory HTTP endpoints ─────────────────────────────────────────────────────
+
+@app.get("/memories")
+async def get_memories_endpoint(user_id: str = "default_user"):
+    try:
+        raw = mem_client.get_all(user_id=user_id, limit=200)
+        results = raw.get("results", []) if isinstance(raw, dict) else raw
+        return {"memories": results}
+    except Exception as e:
+        logger.error(f"[memories] get error: {e}")
+        return {"memories": [], "error": str(e)}
+
+
+@app.delete("/memories/{memory_id}")
+async def delete_memory_endpoint(memory_id: str):
+    try:
+        mem_client.delete(memory_id)
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"[memories] delete error: {e}")
+        return {"success": False, "error": str(e)}
+
+
+class MemoryUpdateBody(BaseModel):
+    data: str
+
+
+@app.put("/memories/{memory_id}")
+async def update_memory_endpoint(memory_id: str, body: MemoryUpdateBody):
+    try:
+        mem_client.update(memory_id, body.data)
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"[memories] update error: {e}")
+        return {"success": False, "error": str(e)}
 
 
 @app.post("/upload")

@@ -401,7 +401,7 @@
   },
   {
     "name": "Microsoft Edge",
-    "exe": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\146.0.3856.97\\msedge.exe",
+    "exe": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\146.0.3856.109\\msedge.exe",
     "title_hint": "msedge"
   },
   {
@@ -2837,46 +2837,6 @@
   {
     "name": "msedge_pwa_launcher",
     "exe": "C:\\Program Files (x86)\\Microsoft\\EdgeCore\\146.0.3856.109\\msedge_pwa_launcher.exe",
-    "title_hint": "msedge_pwa_launcher"
-  },
-  {
-    "name": "cookie_exporter",
-    "exe": "C:\\Program Files (x86)\\Microsoft\\EdgeCore\\146.0.3856.97\\cookie_exporter.exe",
-    "title_hint": "cookie_exporter"
-  },
-  {
-    "name": "elevated_tracing_service",
-    "exe": "C:\\Program Files (x86)\\Microsoft\\EdgeCore\\146.0.3856.97\\elevated_tracing_service.exe",
-    "title_hint": "elevated_tracing_service"
-  },
-  {
-    "name": "elevation_service",
-    "exe": "C:\\Program Files (x86)\\Microsoft\\EdgeCore\\146.0.3856.97\\elevation_service.exe",
-    "title_hint": "elevation_service"
-  },
-  {
-    "name": "mscopilot",
-    "exe": "C:\\Program Files (x86)\\Microsoft\\EdgeCore\\146.0.3856.97\\mscopilot.exe",
-    "title_hint": "mscopilot"
-  },
-  {
-    "name": "msedge",
-    "exe": "C:\\Program Files (x86)\\Microsoft\\EdgeCore\\146.0.3856.97\\msedge.exe",
-    "title_hint": "msedge"
-  },
-  {
-    "name": "msedgewebview2",
-    "exe": "C:\\Program Files (x86)\\Microsoft\\EdgeCore\\146.0.3856.97\\msedgewebview2.exe",
-    "title_hint": "msedgewebview2"
-  },
-  {
-    "name": "msedge_proxy",
-    "exe": "C:\\Program Files (x86)\\Microsoft\\EdgeCore\\146.0.3856.97\\msedge_proxy.exe",
-    "title_hint": "msedge_proxy"
-  },
-  {
-    "name": "msedge_pwa_launcher",
-    "exe": "C:\\Program Files (x86)\\Microsoft\\EdgeCore\\146.0.3856.97\\msedge_pwa_launcher.exe",
     "title_hint": "msedge_pwa_launcher"
   },
   {

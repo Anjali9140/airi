@@ -175,31 +175,70 @@ function startEmbeddingServer() {
 
 function startLlama() {
     const settingsPath = path.join(__dirname, '../agent-server/settings.json');
+    let useLocal = true;
     let modelName = "Qwen/Qwen3-VL-2B-Instruct-GGUF";
 
     if (fs.existsSync(settingsPath)) {
         try {
             const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-            if (settings.model && settings.model !== 'default') modelName = settings.model;
+            if (settings.model && settings.model !== 'default') {
+                modelName = settings.model;
+            }
+            // If model_server points to a remote API, don't start local llama
+            if (settings.model_server &&
+                !settings.model_server.includes('127.0.0.1') &&
+                !settings.model_server.includes('localhost')) {
+                useLocal = false;
+            }
         } catch (e) {
             console.error('[LLAMA] Failed to read settings.json:', e.message);
         }
     }
 
-    // Always start local llama-server; agent settings control which endpoint is used
+    if (!useLocal) {
+        console.log('[LLAMA] Remote API mode — skipping local llama-server');
+        return;
+    }
+
     const llamaExe = path.join(__dirname, '../deps/llama-cpp/llama-server.exe');
     const llamaEnv = { ...process.env, LLAMA_CACHE: path.join(__dirname, '../models') };
-    llamaProcess = spawn(llamaExe, [
-        "-hf", modelName,
-        "--ctx-size", "32768",
-        "-np", "2",
-        "--threads", "6",
-        "--n-gpu-layers", "0",
-        "--port", "11434",
-        "--cache-type-k", "q4_0",
-        "--cache-type-v", "q8_0",
-        "--jinja"
-    ], { env: llamaEnv });
+
+    // Try to use locally cached model file to avoid HF network dependency
+    const snapshotDir = path.join(__dirname, '../models/models--Qwen--Qwen3-VL-2B-Instruct-GGUF/snapshots/52d6c8ffea26cc873ac5ad116f8631268d7eb503');
+    const localModel  = path.join(snapshotDir, 'Qwen3VL-2B-Instruct-Q4_K_M.gguf');
+    const localMmproj = path.join(snapshotDir, 'mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf');
+
+    let args;
+    if (fs.existsSync(localModel)) {
+        console.log('[LLAMA] Using cached local model:', localModel);
+        args = [
+            "-m", localModel,
+            "--mmproj", localMmproj,
+            "--ctx-size", "32768",
+            "-np", "2",
+            "--threads", "6",
+            "--n-gpu-layers", "0",
+            "--port", "11434",
+            "--cache-type-k", "q4_0",
+            "--cache-type-v", "q8_0",
+            "--jinja"
+        ];
+    } else {
+        console.log('[LLAMA] Local model not found, downloading from HF:', modelName);
+        args = [
+            "-hf", modelName,
+            "--ctx-size", "32768",
+            "-np", "2",
+            "--threads", "6",
+            "--n-gpu-layers", "0",
+            "--port", "11434",
+            "--cache-type-k", "q4_0",
+            "--cache-type-v", "q8_0",
+            "--jinja"
+        ];
+    }
+
+    llamaProcess = spawn(llamaExe, args, { env: llamaEnv });
     llamaProcess.stdout.on("data", (data) => console.log(`[LLAMA] ${data}`));
     llamaProcess.stderr.on("data", (data) => console.error(`[LLAMA ERROR] ${data}`));
 }

@@ -1,4 +1,4 @@
-import { ChevronDown } from "lucide-react";
+import { ChevronDown24Regular } from "@fluentui/react-icons";
 import { ThemeToggler } from "./ThemeToggler";
 import { useState, useEffect } from "react";
 import { VoiceLanguageDropdown } from "./VoiceLanguageDropdown";
@@ -15,7 +15,7 @@ function SettingDropdown({ value, setValue, options }) {
         className="w-full flex items-center justify-between bg-bg-hover border border-border-default rounded-lg pl-4 pr-3 py-2 text-sm focus:outline-none focus:border-border-active transition-colors"
       >
         {value}
-        <ChevronDown size={16} className={`text-text-muted transition-transform ${open ? "rotate-180" : ""}`} />
+        <ChevronDown24Regular style={{ fontSize: 16, color: 'var(--text-muted)', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 150ms' }} />
       </button>
       {open && (
         <ul className="absolute mt-2 w-full bg-bg-card border border-border-default rounded-lg shadow-lg z-10 max-h-80 overflow-y-auto lean-slider">
