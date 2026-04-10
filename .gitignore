@@ -55,3 +55,4 @@ workspace/*
 synopsis.tex
 
 agent-server\settings.json
+release\*
