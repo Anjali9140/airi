@@ -49,17 +49,13 @@ const MODELS_DIR   = IS_PACKAGED
 
 const isPackaged = IS_PACKAGED && fs.existsSync(AGENT_BUNDLE_EXE);
 
-// Next.js standalone server (production only)
-// ── next-electron-rsc: intercepts localhost:3000 at protocol level (no open port in prod) ──
-const STANDALONE_DIR = IS_PACKAGED
-    ? path.join(RESOURCES, 'next-server')
-    : path.join(app.getAppPath(), '.next', 'standalone', 'airi');
+// next-electron-rsc: only used in production to serve the standalone Next.js build
+// In dev, we connect directly to the already-running next dev server on localhost:3000
+const STANDALONE_DIR = path.join(RESOURCES, 'next-server');
 
-const { createInterceptor, localhostUrl } = createHandler({
-    dev: !IS_PACKAGED,
-    dir: STANDALONE_DIR,
-    protocol,
-});
+const { createInterceptor, localhostUrl } = IS_PACKAGED
+    ? createHandler({ dev: false, dir: STANDALONE_DIR, protocol })
+    : { createInterceptor: null, localhostUrl: 'http://localhost:3000' };
 
 async function setupDb() {
     // electron-store must be dynamically imported (ESM-only in v9+)
@@ -462,8 +458,10 @@ async function createWindow() {
         return allowed.includes(permission);
     });
 
-    // Register next-electron-rsc interceptor on this window's session
-    const stopIntercept = await createInterceptor({ session: mainWindow.webContents.session });
+    // Register next-electron-rsc interceptor on this window's session (prod only)
+    const stopIntercept = IS_PACKAGED
+        ? await createInterceptor({ session: mainWindow.webContents.session })
+        : null;
     mainWindow.on('closed', () => stopIntercept?.());
 
     mainWindow.setMenuBarVisibility(false);

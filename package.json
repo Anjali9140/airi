@@ -36,6 +36,7 @@
     "motion": "^12.34.0",
     "nanoid": "^5.1.7",
     "next": "^16.2.1",
+    "next-electron-rsc": "^0.3.0",
     "node-base64-image": "^2.2.0",
     "node-summarizer": "^1.0.7",
     "react": "^19.2.4",
